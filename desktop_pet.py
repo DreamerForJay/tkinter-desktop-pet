@@ -368,9 +368,34 @@ class MusicPlayer:
     FADE = 2.0   # 淡入 / 淡出秒數
 
     def __init__(self):
+        self._dir     = resource_path(os.path.join("assets", "music"))
+        self._tracks  : list[str] = []
+        self._index   = 0
         self._path    = resource_path(os.path.join("assets", "music", "study.mp3"))
         self._playing = False
         self._cancel  = threading.Event()
+
+    def _scan_tracks(self):
+        exts = {".mp3", ".ogg", ".wav"}
+        if os.path.isdir(self._dir):
+            self._tracks = sorted(
+                os.path.join(self._dir, f)
+                for f in os.listdir(self._dir)
+                if os.path.splitext(f)[1].lower() in exts
+            )
+        if not self._tracks:
+            self._tracks = [self._path]
+
+    def next(self):
+        """切換到下一首音樂。"""
+        if not PYGAME_OK: return
+        self._scan_tracks()
+        self._index = (self._index + 1) % len(self._tracks)
+        self._path  = self._tracks[self._index]
+        was_playing = self._playing
+        if was_playing:
+            self._hard_stop()
+            self.play()
 
     def play(self):
         if not PYGAME_OK: return
@@ -836,14 +861,14 @@ class ShopView:
 
     def _build(self):
         w = self._win = tk.Toplevel(self._master)
-        w.title("🛍️ 寵物商店")
+        w.title("🛍️ 商店")
         w.config(bg=self.WIN_BG)
         w.resizable(False, False)
 
         # 標題
         hdr = tk.Frame(w, bg=self.HDR_BG, pady=14)
         hdr.pack(fill="x")
-        tk.Label(hdr, text="🛍️  寵物商店", font=("Arial", 16, "bold"),
+        tk.Label(hdr, text="🛍️  商店", font=("Arial", 16, "bold"),
                  bg=self.HDR_BG, fg="white").pack()
         tk.Label(hdr, text="購買後存入背包，隨時餵食！",
                  font=("Arial", 9), bg=self.HDR_BG, fg="#FFCCBC").pack()
@@ -1884,31 +1909,42 @@ class PetController:
             {"label": "⚙️ 自訂番茄鐘時間...", "cmd": self._show_custom_dialog},
         ]
 
+        # ── 預先準備：背景音樂子選單 ──────────────────────────────
+        music_subitems = [
+            {"label": "  🎶  播放", "cmd": self._music.play},
+            {"label": "  📴  關閉", "cmd": self._music.stop},
+            {"label": "  🔀  切換音樂", "cmd": self._music.next},
+        ]
+
+        # ── 預先準備：角色狀態子選單 ──────────────────────────────
+        state_subitems = [
+            {"label": "  😴  發呆",   "cmd": self.do_idle},
+            {"label": "  💻  寫程式", "cmd": self.do_coding},
+            {"label": "  📚  讀書",   "cmd": self.do_studying},
+            {"label": "  💤  睡覺",   "cmd": self.do_sleep},
+        ]
+
         # ── 主選單結構（清爽、分類明確）─────────────────────────
         items = [
             # 狀態顯示
             {"label": f"  🐾  {m.pet_name}", "disabled": True, "font": ("Segoe UI", 10, "bold")},
             {"label": f"     {hp_bar} {hp}%{warn}    💰 {m.coins} 枚{bonus}", "disabled": True, "font": ("Segoe UI", 9)},
             {"sep": True},
-            
-            # 狀態切換
-            {"label": "  😴  發呆", "cmd": self.do_idle},
-            {"label": "  💻  寫程式", "cmd": self.do_coding},
-            {"label": "  📚  讀書", "cmd": self.do_studying},
-            {"label": "  💤  睡覺", "cmd": self.do_sleep},
+
+            # 狀態切換（子選單）
+            {"label": "  🎭  角色狀態切換", "items": state_subitems},
             {"sep": True},
-            
+
             {"label": "  🍅  番茄鐘", "items": pomo_subitems},
             {"label": "  🍎  快速餵食", "items": food_subitems},
             {"sep": True},
-            
+
             # 系統功能
-            {"label": "  🏪  寵物商店", "cmd": self._view.open_shop},
+            {"label": "  🏪  商店", "cmd": self._view.open_shop},
             {"label": f"  🎒  打開背包 ({sum(v for v in inv.values() if v > 0)} 件)", "cmd": self._view.open_backpack},
-            {"label": "  🎶  播放背景音樂", "cmd": self._music.play},
-            {"label": "  📴  關閉背景音樂", "cmd": self._music.stop},
+            {"label": "  🎵  背景音樂", "items": music_subitems},
             {"sep": True},
-            
+
             # 底部
             {"label": "  📊  統計數據", "cmd": self._view.open_stats},
             {"label": "  ⚙️  個人化設定", "cmd": self._view.open_settings},
