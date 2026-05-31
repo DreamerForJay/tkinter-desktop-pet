@@ -331,22 +331,6 @@ class PetModel:
 # LAYER 2 — SERVICES（不含 tkinter，可單獨測試）
 # ════════════════════════════════════════════════════════════════
 
-def _list_characters() -> list[tuple[str, str]]:
-    """掃描 assets/ 找出含動畫子目錄的角色資料夾，回傳 [(顯示名, 資料夾名), ...]。"""
-    STATES = ("idle", "coding", "studying", "eating", "drag", "alert", "sleep")
-    result = [("預設", "default")]
-    assets = resource_path("assets")
-    if not os.path.isdir(assets):
-        return result
-    for name in sorted(os.listdir(assets)):
-        subdir = os.path.join(assets, name)
-        if os.path.isdir(subdir) and any(
-            os.path.isdir(os.path.join(subdir, s)) for s in STATES
-        ):
-            result.append((name, name))
-    return result
-
-
 class AnimationCache:
     """載入並快取各狀態 PNG 序列，支援多角色子目錄。"""
 
@@ -577,7 +561,6 @@ class TimerBubble:
     _W, _H, _R = 112, 74, 11
 
     def __init__(self, parent: tk.Tk):
-        self._visible = False
         w, h, r = self._W, self._H, self._R
         self._pb_x1, self._pb_x2 = 8, w - 8
 
@@ -653,7 +636,6 @@ class TimerBubble:
             self._pb_x1, 62, self._pb_x1 + pb_w, 68)
 
     def set_visible(self, v: bool):
-        self._visible = v
         if v: self._canvas.grid()
         else: self._canvas.grid_remove()
 
@@ -782,28 +764,16 @@ class _ItemCard(tk.Frame):
 
     def __init__(self, parent, item: dict, on_buy, is_food: bool):
         super().__init__(parent, bg=self.NORMAL, relief="solid", bd=1, cursor="hand2")
-        self._item   = item
-        self._is_food = is_food
 
-        # ── 圖示 ──────────────────────────────────────────────
-        tk.Label(self, text=item["icon"], font=("Arial", 22), bg=self.NORMAL,
-                 ).pack(pady=(10, 2))
+        tk.Label(self, text=item["icon"], font=("Arial", 22), bg=self.NORMAL).pack(pady=(10, 2))
+        tk.Label(self, text=item["name"], font=("Arial", 10, "bold"), bg=self.NORMAL).pack()
+        tk.Label(self, text=item["desc"], font=("Arial", 8), fg="#888", bg=self.NORMAL).pack()
 
-        # ── 名稱 ──────────────────────────────────────────────
-        tk.Label(self, text=item["name"], font=("Arial", 10, "bold"),
-                 bg=self.NORMAL).pack()
-
-        # ── 描述 ──────────────────────────────────────────────
-        tk.Label(self, text=item["desc"], font=("Arial", 8),
-                 fg="#888", bg=self.NORMAL).pack()
-
-        # ── 背包數量（僅道具顯示）──────────────────────────────
         if not is_food:
             self._cnt_lbl = tk.Label(self, text="背包: 0", font=("Arial", 8),
                                      fg="#555", bg=self.NORMAL)
             self._cnt_lbl.pack()
 
-        # ── 底部：價格 + 按鈕 ─────────────────────────────────
         btm = tk.Frame(self, bg=self.NORMAL)
         btm.pack(fill="x", padx=10, pady=(6, 10))
         tk.Label(btm, text=f"💰 {item['cost']}", font=("Arial", 10, "bold"),
@@ -813,7 +783,6 @@ class _ItemCard(tk.Frame):
                   bg=clr, fg="white", relief="flat", cursor="hand2",
                   command=on_buy).pack(side="right")
 
-        # ── Hover 綁定（建完所有子元件後才綁） ───────────────
         self._bind_hover(self)
 
     def _bind_hover(self, w: tk.Widget):
@@ -981,9 +950,6 @@ class BackpackView:
             self._win.lift(); self._rebuild(); return
         self._build()
 
-    def refresh(self):
-        self._rebuild()
-
     def _build(self):
         w = self._win = tk.Toplevel(self._master)
         w.title("🎒 我的背包")
@@ -1123,23 +1089,6 @@ class SettingsView:
         self._name = tk.StringVar(value=self._ctrl.model.pet_name)
         tk.Entry(g, textvariable=self._name, width=14, font=("Arial",10)
                  ).grid(row=row, column=1, sticky="w", padx=10); row+=1
-
-        # TODO:切換外觀
-        """
-        tk.Label(g, text="🎨 外觀角色", font=("Arial",10), anchor="w"
-                 ).grid(row=row, column=0, sticky="w", pady=5)
-        chars = _list_characters()
-        self._char_labels = [c[0] for c in chars]
-        self._char_values = [c[1] for c in chars]
-        cur = self._ctrl.model.settings.get("character", "default")
-        try:    cur_idx = self._char_values.index(cur)
-        except ValueError: cur_idx = 0
-        self._char_var = tk.StringVar(value=self._char_labels[cur_idx])
-        self._char_cb = ttk.Combobox(g, textvariable=self._char_var,
-                                     values=self._char_labels, state="readonly",
-                                     width=12)
-        self._char_cb.grid(row=row, column=1, sticky="w", padx=10); row+=1
-        """
 
         # ── 番茄鐘時間 ─────────────────────────────────────────
         tk.Label(g, text="🍅 工作時間（分）", font=("Arial",10), anchor="w"
@@ -1492,10 +1441,6 @@ def _show_dialog(anchor: tk.Misc, title: str, body: str, color: str):
     anchor.wait_window(win)
 
 
-def _pomo_notify(root: tk.Tk, title: str, body: str, color: str):
-    _show_dialog(root, title, body, color)
-
-
 def _info_dialog(anchor: tk.Misc, title: str, body: str):
     _show_dialog(anchor, title, body, "#1565C0")
 
@@ -1561,7 +1506,7 @@ class PetController:
         if mult > 1:
             self._model.bonus_mult = 1
 
-        new_phase = self._pomo.phase  # _advance() 已切換至 rest / long_rest
+        new_phase = self._pomo.phase
         self._set_status("alert")
         self._view.refresh_info()
 
@@ -1571,7 +1516,7 @@ class PetController:
         else:
             head, color = "番茄鐘結束！確認後開始休息。", "#B03A2E"
 
-        _pomo_notify(
+        _show_dialog(
             self._root, "🍅 番茄鐘結束！",
             f"{head}\n\n{bonus}🎉 獲得金幣 +{reward}！（目前：{self._model.coins} 枚）",
             color,
@@ -1582,14 +1527,14 @@ class PetController:
             random.choice(DIALOGUES[key]), 5000))
 
     def _on_short_rest_end(self):
-        _pomo_notify(self._root, "☀️ 休息結束！",
+        _show_dialog(self._root, "☀️ 休息結束！",
                      "確認後開始下一節工作！💪", "#1E8449")
         self._set_status_for_work()
         if self._pomo.auto_start:
             self._root.after(300, self._start_work_session_feedback)
 
     def _on_long_rest_end(self):
-        _pomo_notify(self._root, "🎉 大休息結束！",
+        _show_dialog(self._root, "🎉 大休息結束！",
                      "一個完整週期完成！\n確認後開始新一輪，加油！💪", "#1A5276")
         self._set_status_for_work()
         if self._pomo.auto_start:
