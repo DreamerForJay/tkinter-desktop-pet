@@ -120,9 +120,13 @@ DEFAULT_DATA: dict = {
 def _deep_merge(base: dict, saved: dict) -> dict:
     result = json.loads(json.dumps(base))
     for k, v in saved.items():
-        if k in result and isinstance(result[k], dict) and isinstance(v, dict):
-            result[k] = _deep_merge(result[k], v)
-        elif k in result:
+        if k not in result:
+            continue
+        if isinstance(result[k], dict) and isinstance(v, dict):
+            # Empty base dict = dynamic map (e.g. inventory); preserve all saved entries.
+            # Non-empty base dict = fixed schema; only keep keys defined in base.
+            result[k] = _deep_merge(result[k], v) if result[k] else json.loads(json.dumps(v))
+        else:
             result[k] = v
     return result
 
@@ -231,6 +235,8 @@ class PetModel:
         if inv.get(item_id, 0) < qty:
             return False
         inv[item_id] -= qty
+        if inv[item_id] == 0:
+            del inv[item_id]
         self._dirty()
         return True
 
@@ -241,6 +247,13 @@ class PetModel:
     def patch_settings(self, **kw):
         self._d["settings"].update(kw)
         self._dirty()
+
+    def sync_save(self):
+        try:
+            with open(data_file_path(), "w", encoding="utf-8") as f:
+                json.dump(self._d, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"[Model] 同步儲存失敗：{e}")
 
 
 # ════════════════════════════════════════════════════════════════
@@ -993,10 +1006,6 @@ class SettingsView:
                   relief="flat", command=w.destroy).pack(side="left", padx=6)
 
     def _apply(self):
-        try:
-            character = self._char_values[self._char_labels.index(self._char_var.get())]
-        except (ValueError, AttributeError):
-            character = "default"
         self._ctrl.apply_settings(
             name                 = self._name.get().strip() or "小白",
             work_min             = max(1,  self._work.get()),
@@ -1005,7 +1014,7 @@ class SettingsView:
             sessions_before_long = max(2,  self._sessions_n.get()),
             auto_start           = self._auto_start.get(),
             topmost              = self._topmost.get(),
-            character            = character,
+            character            = "default",
         )
         self._win.destroy()
 
@@ -1697,6 +1706,7 @@ class PetController:
     def _quit(self):
         self._music.stop()
         self._pomo.pause()
+        self._model.sync_save()
         self._view.destroy()
 
 
