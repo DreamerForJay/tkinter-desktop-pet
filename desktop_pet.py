@@ -77,6 +77,77 @@ EATING_MS   = 3_000
 BG          = "white"
 HP_DECAY_MS = 90_000     # 每 90 秒心情 -1
 
+_CHECKIN_FIRST_MS    = 120_000   # 工作開始後 2 分鐘第一次關心
+_CHECKIN_INTERVAL_MS = 300_000   # 之後每 5 分鐘關心一次
+_IDLE_CHAT_MS        = 180_000   # 發呆狀態每 3 分鐘閒聊
+
+DIALOGUES: dict = {
+    "work_start": [
+        "工作時間開始！\n一起加油！💪",
+        "專注模式啟動！✨\n我陪著你喔～",
+        "讓我們一起努力！🎯",
+        "放鬆心情，專注工作！💡",
+    ],
+    "work_early": [
+        "加油！繼續保持～✨",
+        "做得很好！💪",
+        "狀態不錯喔，繼續！",
+        "感覺你很有效率！",
+    ],
+    "work_mid": [
+        "喝點水，保持水分💧",
+        "記得動動手腕喔～",
+        "辛苦了！快一半了！",
+        "保持專注，你做得到！🌟",
+        "需要我唱首歌嗎？🎵",
+    ],
+    "work_late": [
+        "快完成了！再堅持！🎯",
+        "最後衝刺！加油💨",
+        "快到終點了！棒棒！🎉",
+        "勝利就在眼前！⚡",
+    ],
+    "rest_start": [
+        "休息一下！\n伸展一下吧～🙆",
+        "辛苦啦！\n喝個水休息💧",
+        "好好放鬆，待會出發！☀️",
+        "站起來走走吧～👟",
+    ],
+    "long_rest_start": [
+        "一輪結束！\n好好休息一下🌙",
+        "太棒了！\n充分放鬆再出發💤",
+        "辛苦了！\n享受大休息時光～🌸",
+        "這輪你很厲害！zzz💤",
+    ],
+    "mid_hp": [
+        "主人記得關心我喔～",
+        "我需要一些點心了…🍪",
+        "摸摸我好嗎？🐾",
+    ],
+    "low_hp": [
+        "主人…\n我有點不開心了…😢",
+        "可以給我食物嗎？🥺",
+        "心情不太好…\n吃點東西吧🍎",
+        "需要你的關心～😿",
+    ],
+    "eating": [
+        "好好吃！\n謝謝主人！😋",
+        "最愛主人了！❤️",
+        "吃飽飽了！\n心情大好！🎵",
+        "Yummy！感謝款待！",
+    ],
+    "idle": [
+        "今天也要加油喔！✨",
+        "我在這裡陪著你喔～",
+        "有什麼需要我幫忙嗎？",
+        "一起加油吧！💪",
+        "我是你的小夥伴！🐾",
+        "需要開始工作了嗎？\n我準備好了！🍅",
+        "發呆的時候就找我聊聊～",
+        "今天有什麼計畫呀？📝",
+    ],
+}
+
 SHOP_FOOD = [
     {"id":"apple",  "name":"蘋果",    "icon":"🍎","cost":2, "hp":15,"desc":"心情 +15"},
     {"id":"boba",   "name":"珍珠奶茶","icon":"🧋","cost":3, "hp":20,"desc":"心情 +20"},
@@ -120,9 +191,13 @@ DEFAULT_DATA: dict = {
 def _deep_merge(base: dict, saved: dict) -> dict:
     result = json.loads(json.dumps(base))
     for k, v in saved.items():
-        if k in result and isinstance(result[k], dict) and isinstance(v, dict):
-            result[k] = _deep_merge(result[k], v)
-        elif k in result:
+        if k not in result:
+            continue
+        if isinstance(result[k], dict) and isinstance(v, dict):
+            # Empty base dict = dynamic map (e.g. inventory); preserve all saved entries.
+            # Non-empty base dict = fixed schema; only keep keys defined in base.
+            result[k] = _deep_merge(result[k], v) if result[k] else json.loads(json.dumps(v))
+        else:
             result[k] = v
     return result
 
@@ -231,6 +306,8 @@ class PetModel:
         if inv.get(item_id, 0) < qty:
             return False
         inv[item_id] -= qty
+        if inv[item_id] == 0:
+            del inv[item_id]
         self._dirty()
         return True
 
@@ -242,26 +319,17 @@ class PetModel:
         self._d["settings"].update(kw)
         self._dirty()
 
+    def sync_save(self):
+        try:
+            with open(data_file_path(), "w", encoding="utf-8") as f:
+                json.dump(self._d, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"[Model] 同步儲存失敗：{e}")
+
 
 # ════════════════════════════════════════════════════════════════
 # LAYER 2 — SERVICES（不含 tkinter，可單獨測試）
 # ════════════════════════════════════════════════════════════════
-
-def _list_characters() -> list[tuple[str, str]]:
-    """掃描 assets/ 找出含動畫子目錄的角色資料夾，回傳 [(顯示名, 資料夾名), ...]。"""
-    STATES = ("idle", "coding", "studying", "eating", "drag", "alert", "sleep")
-    result = [("預設", "default")]
-    assets = resource_path("assets")
-    if not os.path.isdir(assets):
-        return result
-    for name in sorted(os.listdir(assets)):
-        subdir = os.path.join(assets, name)
-        if os.path.isdir(subdir) and any(
-            os.path.isdir(os.path.join(subdir, s)) for s in STATES
-        ):
-            result.append((name, name))
-    return result
-
 
 class AnimationCache:
     """載入並快取各狀態 PNG 序列，支援多角色子目錄。"""
@@ -387,6 +455,8 @@ class PomodoroTimer:
     def session_done(self) -> int:  return self._session_done
     @property
     def sessions_n(self)   -> int:  return self._sessions_n
+    @property
+    def auto_start(self)   -> bool: return self._auto_start
 
     def start(self):
         if not self._running:
@@ -491,7 +561,6 @@ class TimerBubble:
     _W, _H, _R = 112, 74, 11
 
     def __init__(self, parent: tk.Tk):
-        self._visible = False
         w, h, r = self._W, self._H, self._R
         self._pb_x1, self._pb_x2 = 8, w - 8
 
@@ -567,9 +636,124 @@ class TimerBubble:
             self._pb_x1, 62, self._pb_x1 + pb_w, 68)
 
     def set_visible(self, v: bool):
-        self._visible = v
         if v: self._canvas.grid()
         else: self._canvas.grid_remove()
+
+
+# ── 角色對話氣泡 ──────────────────────────────────────────
+
+class SpeechBubble:
+    """角色對話氣泡，以獨立 Toplevel 浮動顯示在寵物上方。"""
+    _W    = 158
+    _BH   = 68
+    _TH   = 10
+    _H    = 78
+    _R    = 12
+    _BODY = "#FFFDE7"
+    _BORD = "#F9A825"
+    _FG   = "#4A3728"
+
+    def __init__(self, parent: tk.Tk):
+        self._parent    = parent
+        self._after_id  = None
+        self._win       = None
+        self._canvas    = None
+        self._text_item = None
+
+    def show(self, text: str, duration_ms: int = 4000):
+        if self._after_id:
+            try: self._parent.after_cancel(self._after_id)
+            except Exception: pass
+        self._ensure_win()
+        self._canvas.itemconfig(self._text_item, text=text)
+        self._reposition()
+        try:
+            self._win.deiconify()
+            self._win.lift()
+        except Exception:
+            pass
+        self._after_id = self._parent.after(duration_ms, self._hide)
+
+    def reposition(self):
+        """跟隨主視窗重新定位（拖曳時呼叫）。"""
+        if self._after_id and self._win and self._win.winfo_exists():
+            self._reposition()
+
+    def cancel(self):
+        if self._after_id:
+            try: self._parent.after_cancel(self._after_id)
+            except Exception: pass
+            self._after_id = None
+        self._hide()
+
+    def _hide(self):
+        self._after_id = None
+        if self._win:
+            try: self._win.withdraw()
+            except Exception: pass
+
+    def _ensure_win(self):
+        if self._win and self._win.winfo_exists():
+            return
+        w, h, bh, r = self._W, self._H, self._BH, self._R
+        cx = w // 2
+
+        win = self._win = tk.Toplevel(self._parent)
+        win.overrideredirect(True)
+        win.wm_attributes("-topmost", True)
+        win.attributes("-transparentcolor", BG)
+        win.config(bg=BG)
+        win.withdraw()
+
+        cvs = self._canvas = tk.Canvas(
+            win, width=w, height=h,
+            bg=BG, bd=0, highlightthickness=0,
+        )
+        cvs.pack()
+
+        # 三角尾巴（先畫，讓氣泡本體蓋住頂端邊界）
+        cvs.create_polygon(
+            cx - 8, bh, cx + 8, bh, cx, h - 1,
+            fill=self._BODY, outline="",
+        )
+        # 圓角氣泡本體（後畫，蓋住尾巴頂端）
+        cvs.create_polygon(
+            *self._rrect(2, 2, w - 2, bh, r),
+            smooth=True, fill=self._BODY, outline=self._BORD, width=2,
+        )
+        self._text_item = cvs.create_text(
+            w // 2, bh // 2,
+            text="",
+            font=("Segoe UI", 9),
+            fill=self._FG,
+            width=w - 22,
+            justify="center",
+        )
+
+    def _reposition(self):
+        try:
+            px = self._parent.winfo_x()
+            py = self._parent.winfo_y()
+            pw = self._parent.winfo_width()
+        except Exception:
+            return
+        x = px + pw // 2 - self._W // 2
+        y = py - self._H - 6
+        try:
+            self._win.geometry(f"+{max(0, x)}+{max(0, y)}")
+        except Exception:
+            pass
+
+    @staticmethod
+    def _rrect(x1, y1, x2, y2, r):
+        return (
+            x1 + r, y1,     x2 - r, y1,
+            x2,     y1,     x2,     y1 + r,
+            x2,     y2 - r, x2,     y2,
+            x2 - r, y2,     x1 + r, y2,
+            x1,     y2,     x1,     y2 - r,
+            x1,     y1 + r, x1,     y1,
+        )
 
 
 # ── 商店卡片（帶 hover 特效）────────────────────────────────
@@ -580,28 +764,16 @@ class _ItemCard(tk.Frame):
 
     def __init__(self, parent, item: dict, on_buy, is_food: bool):
         super().__init__(parent, bg=self.NORMAL, relief="solid", bd=1, cursor="hand2")
-        self._item   = item
-        self._is_food = is_food
 
-        # ── 圖示 ──────────────────────────────────────────────
-        tk.Label(self, text=item["icon"], font=("Arial", 22), bg=self.NORMAL,
-                 ).pack(pady=(10, 2))
+        tk.Label(self, text=item["icon"], font=("Arial", 22), bg=self.NORMAL).pack(pady=(10, 2))
+        tk.Label(self, text=item["name"], font=("Arial", 10, "bold"), bg=self.NORMAL).pack()
+        tk.Label(self, text=item["desc"], font=("Arial", 8), fg="#888", bg=self.NORMAL).pack()
 
-        # ── 名稱 ──────────────────────────────────────────────
-        tk.Label(self, text=item["name"], font=("Arial", 10, "bold"),
-                 bg=self.NORMAL).pack()
-
-        # ── 描述 ──────────────────────────────────────────────
-        tk.Label(self, text=item["desc"], font=("Arial", 8),
-                 fg="#888", bg=self.NORMAL).pack()
-
-        # ── 背包數量（僅道具顯示）──────────────────────────────
         if not is_food:
             self._cnt_lbl = tk.Label(self, text="背包: 0", font=("Arial", 8),
                                      fg="#555", bg=self.NORMAL)
             self._cnt_lbl.pack()
 
-        # ── 底部：價格 + 按鈕 ─────────────────────────────────
         btm = tk.Frame(self, bg=self.NORMAL)
         btm.pack(fill="x", padx=10, pady=(6, 10))
         tk.Label(btm, text=f"💰 {item['cost']}", font=("Arial", 10, "bold"),
@@ -611,7 +783,6 @@ class _ItemCard(tk.Frame):
                   bg=clr, fg="white", relief="flat", cursor="hand2",
                   command=on_buy).pack(side="right")
 
-        # ── Hover 綁定（建完所有子元件後才綁） ───────────────
         self._bind_hover(self)
 
     def _bind_hover(self, w: tk.Widget):
@@ -779,9 +950,6 @@ class BackpackView:
             self._win.lift(); self._rebuild(); return
         self._build()
 
-    def refresh(self):
-        self._rebuild()
-
     def _build(self):
         w = self._win = tk.Toplevel(self._master)
         w.title("🎒 我的背包")
@@ -922,23 +1090,6 @@ class SettingsView:
         tk.Entry(g, textvariable=self._name, width=14, font=("Arial",10)
                  ).grid(row=row, column=1, sticky="w", padx=10); row+=1
 
-        # TODO:切換外觀
-        """
-        tk.Label(g, text="🎨 外觀角色", font=("Arial",10), anchor="w"
-                 ).grid(row=row, column=0, sticky="w", pady=5)
-        chars = _list_characters()
-        self._char_labels = [c[0] for c in chars]
-        self._char_values = [c[1] for c in chars]
-        cur = self._ctrl.model.settings.get("character", "default")
-        try:    cur_idx = self._char_values.index(cur)
-        except ValueError: cur_idx = 0
-        self._char_var = tk.StringVar(value=self._char_labels[cur_idx])
-        self._char_cb = ttk.Combobox(g, textvariable=self._char_var,
-                                     values=self._char_labels, state="readonly",
-                                     width=12)
-        self._char_cb.grid(row=row, column=1, sticky="w", padx=10); row+=1
-        """
-
         # ── 番茄鐘時間 ─────────────────────────────────────────
         tk.Label(g, text="🍅 工作時間（分）", font=("Arial",10), anchor="w"
                  ).grid(row=row, column=0, sticky="w", pady=4)
@@ -993,10 +1144,6 @@ class SettingsView:
                   relief="flat", command=w.destroy).pack(side="left", padx=6)
 
     def _apply(self):
-        try:
-            character = self._char_values[self._char_labels.index(self._char_var.get())]
-        except (ValueError, AttributeError):
-            character = "default"
         self._ctrl.apply_settings(
             name                 = self._name.get().strip() or "小白",
             work_min             = max(1,  self._work.get()),
@@ -1005,7 +1152,7 @@ class SettingsView:
             sessions_before_long = max(2,  self._sessions_n.get()),
             auto_start           = self._auto_start.get(),
             topmost              = self._topmost.get(),
-            character            = character,
+            character            = "default",
         )
         self._win.destroy()
 
@@ -1056,6 +1203,7 @@ class PetView:
         self._bind_events()
         self._animate()
         self._hp_loop()
+        self._root.after(0, self._snap_to_bottom_right)
 
     # ── 視窗初始化 ────────────────────────────────────────────
 
@@ -1065,10 +1213,13 @@ class PetView:
         r.wm_attributes("-topmost", cfg.get("always_on_top", True))
         r.attributes("-transparentcolor", BG)
         r.config(bg=BG)
-        r.geometry("+200+200")
+        r.geometry("+0+0")
         r.grid_columnconfigure(0, weight=1)
 
     def _build_ui(self, cfg: dict):
+        # 對話氣泡（Toplevel 浮動，不影響主視窗 grid）
+        self._speech = SpeechBubble(self._root)
+
         # row=0：對話框（頭頂計時器）
         self._bubble = TimerBubble(self._root)
 
@@ -1087,6 +1238,16 @@ class PetView:
 
         self._refresh_info()
 
+    def _snap_to_bottom_right(self):
+        self._root.update_idletasks()
+        sw = self._root.winfo_screenwidth()
+        sh = self._root.winfo_screenheight()
+        pw = self._root.winfo_width()
+        ph = self._root.winfo_height()
+        x = max(0, sw - pw - 20)
+        y = max(0, sh - ph - 60)   # 60px 保留 Windows 工作列空間
+        self._root.geometry(f"+{x}+{y}")
+
     # ── 公開介面（供 Controller 呼叫）─────────────────────────
 
     def refresh_info(self):
@@ -1104,6 +1265,9 @@ class PetView:
 
     def hide_timer(self):
         self._bubble.set_visible(False)
+
+    def show_speech(self, text: str, duration_ms: int = 4000):
+        self._speech.show(text, duration_ms)
 
     def trigger_eating(self, return_to: str):
         if self._eat_id:
@@ -1134,6 +1298,7 @@ class PetView:
     def destroy(self):
         for aid in (self._anim_id, self._eat_id, self._hp_id):
             if aid: self._root.after_cancel(aid)
+        self._speech.cancel()
         if getattr(self, '_posted_menu', None):
             try:
                 self._posted_menu.unpost()
@@ -1231,6 +1396,7 @@ class PetView:
 
     def _drag_move(self, event):
         self._root.geometry(f"+{event.x_root - self._ox}+{event.y_root - self._oy}")
+        self._speech.reposition()
 
     def _drag_end(self, event):
         if self._dragging:
@@ -1255,9 +1421,10 @@ class PetView:
 # ── 自訂對話框（統一入口）────────────────────────────────────
 
 def _show_dialog(anchor: tk.Misc, title: str, body: str, color: str):
-    """所有自訂對話框的共用實作，阻塞直到使用者確認。"""
+    """所有自訂對話框的共用實作，置頂顯示於螢幕正中心，阻塞直到使用者確認。"""
     win = tk.Toplevel(anchor)
     win.resizable(False, False)
+    win.wm_attributes("-topmost", True)
     win.grab_set()
 
     hdr = tk.Frame(win, bg=color, pady=10)
@@ -1276,18 +1443,12 @@ def _show_dialog(anchor: tk.Misc, title: str, body: str, color: str):
               command=win.destroy).pack(pady=(0, 14))
 
     win.update_idletasks()
-    try:
-        ax = anchor.winfo_rootx() + anchor.winfo_width() // 2
-        ay = anchor.winfo_rooty()
-    except Exception:
-        ax, ay = 400, 300
-    ww, wh = win.winfo_width(), win.winfo_height()
-    win.geometry(f"+{max(0, ax - ww//2)}+{max(0, ay - wh - 8)}")
+    sw = win.winfo_screenwidth()
+    sh = win.winfo_screenheight()
+    ww = win.winfo_width()
+    wh = win.winfo_height()
+    win.geometry(f"+{(sw - ww) // 2}+{(sh - wh) // 2}")
     anchor.wait_window(win)
-
-
-def _pomo_notify(root: tk.Tk, title: str, body: str, color: str):
-    _show_dialog(root, title, body, color)
 
 
 def _info_dialog(anchor: tk.Misc, title: str, body: str):
@@ -1313,8 +1474,10 @@ class PetController:
         self._root   = root
         self._model  = model
         self._view   = view
-        self._music  = MusicPlayer()
-        self._status = "idle"
+        self._music        = MusicPlayer()
+        self._status       = "idle"
+        self._checkin_id   = None
+        self._idle_chat_id = None
 
         cfg = model.settings
         self._pomo = PomodoroTimer(
@@ -1330,6 +1493,7 @@ class PetController:
             on_long_rest_end     = self._on_long_rest_end,
         )
         view.set_controller(self)
+        self._schedule_idle_chat()
 
     @property
     def model(self) -> PetModel:
@@ -1343,6 +1507,7 @@ class PetController:
                                 visible=self._pomo.running)
 
     def _on_work_end(self):
+        self._cancel_work_checkin()
         mult   = self._model.bonus_mult
         reward = 10 * mult
         self._model.coins += reward
@@ -1351,7 +1516,7 @@ class PetController:
         if mult > 1:
             self._model.bonus_mult = 1
 
-        new_phase = self._pomo.phase  # _advance() 已切換至 rest / long_rest
+        new_phase = self._pomo.phase
         self._set_status("alert")
         self._view.refresh_info()
 
@@ -1361,29 +1526,41 @@ class PetController:
         else:
             head, color = "番茄鐘結束！確認後開始休息。", "#B03A2E"
 
-        _pomo_notify(
+        _show_dialog(
             self._root, "🍅 番茄鐘結束！",
             f"{head}\n\n{bonus}🎉 獲得金幣 +{reward}！（目前：{self._model.coins} 枚）",
             color,
         )
         self._set_status_for_rest(new_phase)
+        key = "long_rest_start" if new_phase == "long_rest" else "rest_start"
+        self._root.after(300, lambda: self._view.show_speech(
+            random.choice(DIALOGUES[key]), 5000))
 
     def _on_short_rest_end(self):
-        _pomo_notify(self._root, "☀️ 休息結束！",
+        _show_dialog(self._root, "☀️ 休息結束！",
                      "確認後開始下一節工作！💪", "#1E8449")
         self._set_status_for_work()
+        if self._pomo.auto_start:
+            self._root.after(300, self._start_work_session_feedback)
 
     def _on_long_rest_end(self):
-        _pomo_notify(self._root, "🎉 大休息結束！",
+        _show_dialog(self._root, "🎉 大休息結束！",
                      "一個完整週期完成！\n確認後開始新一輪，加油！💪", "#1A5276")
         self._set_status_for_work()
+        if self._pomo.auto_start:
+            self._root.after(300, self._start_work_session_feedback)
 
     # ── 心情衰減 ──────────────────────────────────────────────
 
     def on_hp_tick(self):
         if self._status not in ("eating", "alert"):
+            old_hp = self._model.happiness
             self._model.happiness -= 1
             self._view.refresh_info()
+            if old_hp == 30:
+                self._view.show_speech(random.choice(DIALOGUES["low_hp"]), 6000)
+            elif old_hp == 60:
+                self._view.show_speech(random.choice(DIALOGUES["mid_hp"]))
 
     # ── 狀態機 ────────────────────────────────────────────────
 
@@ -1409,6 +1586,7 @@ class PetController:
     def toggle_pomo(self):
         if self._pomo.running:
             self._pomo.pause()
+            self._cancel_work_checkin()
             self._view.hide_timer()
             if self._pomo.phase == "work":
                 self._music.stop()
@@ -1417,6 +1595,7 @@ class PetController:
             if self._pomo.phase == "work":
                 self._set_status("studying")
                 self._music.play()
+                self._root.after(200, self._start_work_session_feedback)
 
     def reset_pomo(self):
         self._pomo.reset()
@@ -1450,6 +1629,7 @@ class PetController:
             self._model.happiness += food["hp"]
             self._view.refresh_info()
             self._view.trigger_eating(self._status)
+            self._view.show_speech(random.choice(DIALOGUES["eating"]), 3000)
         elif item_id == "potion":
             self._model.happiness = 100
             self._view.refresh_info()
@@ -1694,9 +1874,58 @@ class PetController:
         else:
             self._set_status("idle")
 
+    # ── 對話系統 ──────────────────────────────────────────────
+
+    def _start_work_session_feedback(self):
+        self._view.show_speech(random.choice(DIALOGUES["work_start"]), 3000)
+        self._schedule_work_checkin()
+
+    def _schedule_work_checkin(self, delay_ms: int = _CHECKIN_FIRST_MS):
+        self._cancel_work_checkin()
+        self._checkin_id = self._root.after(delay_ms, self._do_work_checkin)
+
+    def _cancel_work_checkin(self):
+        if self._checkin_id:
+            self._root.after_cancel(self._checkin_id)
+            self._checkin_id = None
+
+    def _do_work_checkin(self):
+        self._checkin_id = None
+        if not self._pomo.running or self._pomo.phase != "work":
+            return
+        remain = self._pomo._remain
+        total  = self._pomo._work_s
+        ratio  = remain / max(1, total)
+        if ratio > 0.66:
+            key = "work_early"
+        elif ratio > 0.33:
+            key = "work_mid"
+        else:
+            key = "work_late"
+        self._view.show_speech(random.choice(DIALOGUES[key]))
+        self._schedule_work_checkin(_CHECKIN_INTERVAL_MS)
+
+    def _schedule_idle_chat(self):
+        self._cancel_idle_chat()
+        self._idle_chat_id = self._root.after(_IDLE_CHAT_MS, self._do_idle_chat)
+
+    def _cancel_idle_chat(self):
+        if self._idle_chat_id:
+            self._root.after_cancel(self._idle_chat_id)
+            self._idle_chat_id = None
+
+    def _do_idle_chat(self):
+        self._idle_chat_id = None
+        if self._status == "idle" and not self._pomo.running:
+            self._view.show_speech(random.choice(DIALOGUES["idle"]))
+        self._schedule_idle_chat()
+
     def _quit(self):
         self._music.stop()
         self._pomo.pause()
+        self._cancel_work_checkin()
+        self._cancel_idle_chat()
+        self._model.sync_save()
         self._view.destroy()
 
 
