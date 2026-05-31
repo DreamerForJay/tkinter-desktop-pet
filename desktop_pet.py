@@ -1203,6 +1203,7 @@ class PetView:
         self._bind_events()
         self._animate()
         self._hp_loop()
+        self._root.after(0, self._snap_to_bottom_right)
 
     # ── 視窗初始化 ────────────────────────────────────────────
 
@@ -1212,7 +1213,7 @@ class PetView:
         r.wm_attributes("-topmost", cfg.get("always_on_top", True))
         r.attributes("-transparentcolor", BG)
         r.config(bg=BG)
-        r.geometry("+200+200")
+        r.geometry("+0+0")
         r.grid_columnconfigure(0, weight=1)
 
     def _build_ui(self, cfg: dict):
@@ -1236,6 +1237,16 @@ class PetView:
         self._info_lbl.grid(row=2, column=0, pady=(0, 2))
 
         self._refresh_info()
+
+    def _snap_to_bottom_right(self):
+        self._root.update_idletasks()
+        sw = self._root.winfo_screenwidth()
+        sh = self._root.winfo_screenheight()
+        pw = self._root.winfo_width()
+        ph = self._root.winfo_height()
+        x = max(0, sw - pw - 20)
+        y = max(0, sh - ph - 60)   # 60px 保留 Windows 工作列空間
+        self._root.geometry(f"+{x}+{y}")
 
     # ── 公開介面（供 Controller 呼叫）─────────────────────────
 
@@ -1410,9 +1421,10 @@ class PetView:
 # ── 自訂對話框（統一入口）────────────────────────────────────
 
 def _show_dialog(anchor: tk.Misc, title: str, body: str, color: str):
-    """所有自訂對話框的共用實作，阻塞直到使用者確認。"""
+    """所有自訂對話框的共用實作，置頂顯示於螢幕正中心，阻塞直到使用者確認。"""
     win = tk.Toplevel(anchor)
     win.resizable(False, False)
+    win.wm_attributes("-topmost", True)
     win.grab_set()
 
     hdr = tk.Frame(win, bg=color, pady=10)
@@ -1431,13 +1443,11 @@ def _show_dialog(anchor: tk.Misc, title: str, body: str, color: str):
               command=win.destroy).pack(pady=(0, 14))
 
     win.update_idletasks()
-    try:
-        ax = anchor.winfo_rootx() + anchor.winfo_width() // 2
-        ay = anchor.winfo_rooty()
-    except Exception:
-        ax, ay = 400, 300
-    ww, wh = win.winfo_width(), win.winfo_height()
-    win.geometry(f"+{max(0, ax - ww//2)}+{max(0, ay - wh - 8)}")
+    sw = win.winfo_screenwidth()
+    sh = win.winfo_screenheight()
+    ww = win.winfo_width()
+    wh = win.winfo_height()
+    win.geometry(f"+{(sw - ww) // 2}+{(sh - wh) // 2}")
     anchor.wait_window(win)
 
 
