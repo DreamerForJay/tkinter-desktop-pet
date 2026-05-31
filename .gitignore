@@ -1,4 +1,4 @@
 __pycache__/
-assets/
 *.pyc
 data.json
+pet_save.json
