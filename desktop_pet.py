@@ -26,8 +26,14 @@
 """
 
 # ── 標準庫 ────────────────────────────────────────────────────
-import sys, os, json, threading, queue, random, time
+import sys, os, json, threading, queue, random, time, re
 from datetime import date
+
+
+def _nat_key(s: str) -> list:
+    """自然排序 key，讓 slice_10 排在 slice_9 之後。"""
+    return [int(c) if c.isdigit() else c.lower()
+            for c in re.split(r'(\d+)', s)]
 
 # ── GUI ───────────────────────────────────────────────────────
 import tkinter as tk
@@ -331,6 +337,22 @@ class PetModel:
 # LAYER 2 — SERVICES（不含 tkinter，可單獨測試）
 # ════════════════════════════════════════════════════════════════
 
+def _list_characters() -> list[tuple[str, str]]:
+    """掃描 assets/ 找出含動畫子目錄的角色資料夾，回傳 [(顯示名, 資料夾名)]。"""
+    STATES = ("idle", "coding", "studying", "eating", "drag")
+    result = [("預設", "default")]
+    assets = resource_path("assets")
+    if not os.path.isdir(assets):
+        return result
+    for name in sorted(os.listdir(assets)):
+        subdir = os.path.join(assets, name)
+        if os.path.isdir(subdir) and any(
+            os.path.isdir(os.path.join(subdir, s)) for s in STATES
+        ):
+            result.append((name, name))
+    return result
+
+
 class AnimationCache:
     """載入並快取各狀態 PNG 序列，支援多角色子目錄。"""
 
@@ -348,7 +370,10 @@ class AnimationCache:
         frames = []
         if PIL_OK and os.path.isdir(folder):
             try:
-                for name in sorted(f for f in os.listdir(folder) if f.lower().endswith(".png")):
+                for name in sorted(
+                    (f for f in os.listdir(folder) if f.lower().endswith(".png")),
+                    key=_nat_key,
+                ):
                     try:
                         img = Image.open(os.path.join(folder, name)).convert("RGBA")
                         bg  = Image.new("RGBA", img.size, BG)
@@ -358,6 +383,10 @@ class AnimationCache:
                         print(f"[Anim] {name}: {e}")
             except Exception as e:
                 print(f"[Anim] {folder}: {e}")
+        if not frames and state != "idle":
+            idle_frames = self.get("idle", character)
+            self._cache[key] = idle_frames
+            return idle_frames
         self._cache[key] = frames
         return frames
 
@@ -1102,6 +1131,20 @@ class SettingsView:
         tk.Entry(g, textvariable=self._name, width=14, font=("Arial",10)
                  ).grid(row=row, column=1, sticky="w", padx=10); row+=1
 
+        # ── 外觀角色 ──────────────────────────────────────────
+        tk.Label(g, text="🎨 外觀角色", font=("Arial",10), anchor="w"
+                 ).grid(row=row, column=0, sticky="w", pady=5)
+        chars = _list_characters()
+        self._char_labels = [c[0] for c in chars]
+        self._char_values = [c[1] for c in chars]
+        cur = self._ctrl.model.settings.get("character", "default")
+        try:    cur_idx = self._char_values.index(cur)
+        except ValueError: cur_idx = 0
+        self._char_var = tk.StringVar(value=self._char_labels[cur_idx])
+        ttk.Combobox(g, textvariable=self._char_var,
+                     values=self._char_labels, state="readonly", width=12
+                     ).grid(row=row, column=1, sticky="w", padx=10); row+=1
+
         # ── 番茄鐘時間 ─────────────────────────────────────────
         tk.Label(g, text="🍅 工作時間（分）", font=("Arial",10), anchor="w"
                  ).grid(row=row, column=0, sticky="w", pady=4)
@@ -1156,6 +1199,11 @@ class SettingsView:
                   relief="flat", command=w.destroy).pack(side="left", padx=6)
 
     def _apply(self):
+        try:
+            idx = self._char_labels.index(self._char_var.get())
+            character = self._char_values[idx]
+        except (ValueError, AttributeError):
+            character = self._ctrl.model.settings.get("character", "default")
         self._ctrl.apply_settings(
             name                 = self._name.get().strip() or "小白",
             work_min             = max(1,  self._work.get()),
@@ -1164,7 +1212,7 @@ class SettingsView:
             sessions_before_long = max(2,  self._sessions_n.get()),
             auto_start           = self._auto_start.get(),
             topmost              = self._topmost.get(),
-            character            = self._ctrl.model.settings.get("character", "default"),
+            character            = character,
         )
         self._win.destroy()
 
@@ -1295,6 +1343,7 @@ class PetView:
 
     def update_character(self, character: str):
         self._character = character
+        self._frame_i = 0
 
     def apply_window_settings(self, cfg: dict):
         self._root.wm_attributes("-topmost", cfg["always_on_top"])
