@@ -1,5 +1,12 @@
 __pycache__/
 assets/
 dist/
+build/
 *.pyc
+*.pyo
+*.spec
 data.json
+pet_save.json
+*.pdf
+*草稿*
+.venv/

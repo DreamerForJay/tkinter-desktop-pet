@@ -117,6 +117,35 @@ Dpet/
 
 ## 架構說明（MVC）
 
+```mermaid
+flowchart TD
+    subgraph Controller
+        C[PetController\n事件處理 / 業務邏輯\n對話排程]
+    end
+    subgraph Model
+        M[PetModel\n金幣 / 心情 / 背包 / 設定]
+        AS[_AutoSaver\n背景執行緒非同步寫 JSON]
+        M --> AS
+    end
+    subgraph Services
+        PT[PomodoroTimer\nroot.after 狀態機]
+        MP[MusicPlayer\npygame 漸入漸出]
+        AC[AnimationCache\nPNG 序列快取]
+    end
+    subgraph View
+        PV[PetView\n主視窗 / 動畫 / 氣泡]
+        SB[SpeechBubble]
+        TB[TimerBubble]
+        SW[ShopView / BackpackView\nStatsView / SettingsView]
+        PV --> SB & TB & SW
+    end
+
+    C -->|讀寫資料| M
+    C -->|更新 UI| PV
+    C -->|控制| PT & MP
+    PV -->|取幀| AC
+```
+
 整個專案以單一檔案 `desktop_pet.py` 實作，分為四個明確分層：
 
 | 層級 | 類別 / 函式 | 職責 |
