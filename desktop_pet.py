@@ -1126,7 +1126,7 @@ class SettingsView:
 
     def _build(self):
         w = self._win = tk.Toplevel(self._master)
-        w.title("⚙️ 設定"); w.resizable(False, False); w.grab_set()
+        w.title("⚙️ 設定"); w.resizable(False, False)
 
         hdr = tk.Frame(w, bg="#F3E5F5", pady=10); hdr.pack(fill="x")
         tk.Label(hdr, text="⚙️ 設定", font=("Arial",14,"bold"),
@@ -1762,6 +1762,14 @@ class PetController:
 
         menu = tk.Menu(self._root, tearoff=0, font=FNT)
 
+        def _cmd(f):
+            """點選後先關閉選單再執行指令。"""
+            def _w():
+                try: menu.unpost()
+                except Exception: pass
+                f()
+            return _w
+
         # ── 寵物資訊（唯讀）────────────────────────────────────
         menu.add_command(label=f"  🎭  {m.pet_name}",
                          state="disabled", font=FNT_BD)
@@ -1775,10 +1783,10 @@ class PetController:
         menu.add_separator()
 
         # ── 活動 ─────────────────────────────────────────────
-        menu.add_command(label="  😴  發呆",   command=self.do_idle)
-        menu.add_command(label="  💻  寫程式", command=self.do_coding)
-        menu.add_command(label="  📚  讀書",   command=self.do_studying)
-        menu.add_command(label="  💤  睡覺",   command=self.do_sleep)
+        menu.add_command(label="  😴  發呆",   command=_cmd(self.do_idle))
+        menu.add_command(label="  💻  寫程式", command=_cmd(self.do_coding))
+        menu.add_command(label="  📚  讀書",   command=_cmd(self.do_studying))
+        menu.add_command(label="  💤  睡覺",   command=_cmd(self.do_sleep))
         menu.add_separator()
 
         # ── 切換角色 ─────────────────────────────────────────
@@ -1790,7 +1798,7 @@ class PetController:
                 indicator = "  ✓  " if val == cur_char else "      "
                 char_menu.add_command(
                     label=f"{indicator}{lbl}",
-                    command=lambda v=val: self.switch_character(v),
+                    command=_cmd(lambda v=val: self.switch_character(v)),
                 )
             menu.add_cascade(label="  🎨  切換角色", menu=char_menu)
             menu.add_separator()
@@ -1798,17 +1806,17 @@ class PetController:
         # ── 商店 & 背包 ───────────────────────────────────────
         bag_n     = sum(v for v in inv.values() if v > 0)
         bag_label = f"  🎒  背包（{bag_n} 件）" if bag_n else "  🎒  背包（空）"
-        menu.add_command(label="  🏪  商店",   command=self._view.open_shop)
-        menu.add_command(label=bag_label,       command=self._view.open_backpack)
+        menu.add_command(label="  🏪  商店",   command=_cmd(self._view.open_shop))
+        menu.add_command(label=bag_label,       command=_cmd(self._view.open_backpack))
         menu.add_separator()
 
         # ── 音樂 ─────────────────────────────────────────────
         music = tk.Menu(menu, tearoff=0, font=FNT)
         music.add_command(label="  🎶  神隱少女",
-                          command=self._music.play)
+                          command=_cmd(self._music.play))
         music.add_separator()
         music.add_command(label="  📴  關閉音樂",
-                          command=self._music.stop)
+                          command=_cmd(self._music.stop))
         menu.add_cascade(label="  🎵  切換音樂", menu=music)
 
         # ── 番茄鐘子選單 ──────────────────────────────────────
@@ -1824,28 +1832,28 @@ class PetController:
         pomo.add_separator()
         pomo.add_command(
             label="  ⏸️  暫停" if self._pomo.running else "  ▶️  開始",
-            command=self.toggle_pomo)
-        pomo.add_command(label="  🔁  重設全部", command=self.reset_pomo)
+            command=_cmd(self.toggle_pomo))
+        pomo.add_command(label="  🔁  重設全部", command=_cmd(self.reset_pomo))
         
         pomo.add_separator()
 
         pre = tk.Menu(pomo, tearoff=0, font=FNT)
         pre.add_command(label="  🍅  經典   25 / 5 / 15 分",
-                        command=lambda: self._apply_preset(25, 5, 15, 4))
+                        command=_cmd(lambda: self._apply_preset(25, 5, 15, 4)))
         pre.add_command(label="  💪  雙倍   50 / 10 / 30 分",
-                        command=lambda: self._apply_preset(50, 10, 30, 4))
+                        command=_cmd(lambda: self._apply_preset(50, 10, 30, 4)))
         pre.add_command(label="  ⚡  迷你   15 / 3 / 10 分",
-                        command=lambda: self._apply_preset(15, 3, 10, 4))
+                        command=_cmd(lambda: self._apply_preset(15, 3, 10, 4)))
         pre.add_separator()
-        pre.add_command(label="  ⚙  自訂時間…", command=self._show_custom_dialog)
+        pre.add_command(label="  ⚙  自訂時間…", command=_cmd(self._show_custom_dialog))
         pomo.add_cascade(label="  ⏱  快速預設", menu=pre)
 
         menu.add_cascade(label="  🍅  番茄鐘",  menu=pomo)
         menu.add_separator()
 
         # ── 底部 ──────────────────────────────────────────────
-        menu.add_command(label="  📊  統計",     command=self._view.open_stats)
-        menu.add_command(label="  ⚙️  設定",     command=self._view.open_settings)
+        menu.add_command(label="  📊  統計",     command=_cmd(self._view.open_stats))
+        menu.add_command(label="  ⚙️  設定",     command=_cmd(self._view.open_settings))
         menu.add_separator()
         def _exit_app():
             try: menu.grab_release()

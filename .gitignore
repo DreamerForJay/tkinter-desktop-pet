@@ -1,6 +1,6 @@
 __pycache__/
-assets/
 dist/
+*.mp3
 build/
 *.pyc
 *.pyo
