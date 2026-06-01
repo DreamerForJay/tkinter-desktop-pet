@@ -1705,18 +1705,6 @@ class PetController:
         menu.add_command(label="  💤  睡覺",   command=self.do_sleep)
         menu.add_separator()
 
-        # ── 餵食（背包中的食物）──────────────────────────────
-        foods = [(iid, cnt) for iid, cnt in inv.items()
-                 if iid in FOOD_IDS and cnt > 0]
-        if foods:
-            for iid, cnt in foods:
-                food = FOOD_MAP[iid]
-                menu.add_command(
-                    label=f"  {food['icon']}  {food['name']} ×{cnt}"
-                          f"  （{food['desc']}）",
-                    command=lambda i=iid: self.use_item(i))
-            menu.add_separator()
-
         # ── 商店 & 背包 ───────────────────────────────────────
         bag_n     = sum(v for v in inv.values() if v > 0)
         bag_label = f"  🎒  背包（{bag_n} 件）" if bag_n else "  🎒  背包（空）"
@@ -1770,11 +1758,11 @@ class PetController:
         menu.add_command(label="  ⚙️  設定",     command=self._view.open_settings)
         menu.add_separator()
         def _exit_app():
-            try: menu.unpost()
-            except Exception: pass
             try: menu.grab_release()
             except Exception: pass
-            self._root.after_idle(self._quit)
+            try: menu.unpost()
+            except Exception: pass
+            self._root.after(50, self._quit)
 
         menu.add_command(label="  ❌  結束程式",
                           command=_exit_app)
@@ -1901,6 +1889,8 @@ class PetController:
         self._schedule_idle_chat()
 
     def _quit(self):
+        try: self._root.grab_release()
+        except Exception: pass
         self._music.stop()
         self._pomo.pause()
         self._cancel_work_checkin()
