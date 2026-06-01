@@ -338,18 +338,31 @@ class PetModel:
 # ════════════════════════════════════════════════════════════════
 
 def _list_characters() -> list[tuple[str, str]]:
-    """掃描 assets/ 找出含動畫子目錄的角色資料夾，回傳 [(顯示名, 資料夾名)]。"""
+    """掃描 assets/ 找出含動畫子目錄的角色，回傳 [(顯示名, 資料夾名)]。
+    顯示名優先從 assets/characters.json 讀取，沒有則用資料夾名。"""
     STATES = ("idle", "coding", "studying", "eating", "drag")
-    result = [("預設", "default")]
     assets = resource_path("assets")
+
+    name_map: dict[str, str] = {"default": "預設"}
+    cfg_path = os.path.join(assets, "characters.json")
+    if os.path.isfile(cfg_path):
+        try:
+            with open(cfg_path, encoding="utf-8") as f:
+                name_map.update(json.load(f))
+        except Exception as e:
+            print(f"[Characters] 讀取名稱設定失敗：{e}")
+
+    result = [(name_map.get("default", "預設"), "default")]
     if not os.path.isdir(assets):
         return result
-    for name in sorted(os.listdir(assets)):
-        subdir = os.path.join(assets, name)
+    for folder in sorted(os.listdir(assets)):
+        if folder == "default":
+            continue
+        subdir = os.path.join(assets, folder)
         if os.path.isdir(subdir) and any(
             os.path.isdir(os.path.join(subdir, s)) for s in STATES
         ):
-            result.append((name, name))
+            result.append((name_map.get(folder, folder), folder))
     return result
 
 
@@ -1134,16 +1147,25 @@ class SettingsView:
         # ── 外觀角色 ──────────────────────────────────────────
         tk.Label(g, text="🎨 外觀角色", font=("Arial",10), anchor="w"
                  ).grid(row=row, column=0, sticky="w", pady=5)
-        chars = _list_characters()
-        self._char_labels = [c[0] for c in chars]
-        self._char_values = [c[1] for c in chars]
-        cur = self._ctrl.model.settings.get("character", "default")
-        try:    cur_idx = self._char_values.index(cur)
-        except ValueError: cur_idx = 0
-        self._char_var = tk.StringVar(value=self._char_labels[cur_idx])
-        ttk.Combobox(g, textvariable=self._char_var,
-                     values=self._char_labels, state="readonly", width=12
-                     ).grid(row=row, column=1, sticky="w", padx=10); row+=1
+        try:
+            chars = _list_characters()
+            self._char_labels = [c[0] for c in chars]
+            self._char_values = [c[1] for c in chars]
+            cur = self._ctrl.model.settings.get("character", "default")
+            try:    cur_idx = self._char_values.index(cur)
+            except ValueError: cur_idx = 0
+            self._char_var = tk.StringVar(value=self._char_labels[cur_idx])
+            ttk.Combobox(g, textvariable=self._char_var,
+                         values=self._char_labels, state="readonly", width=12
+                         ).grid(row=row, column=1, sticky="w", padx=10)
+        except Exception as e:
+            print(f"[Settings] 角色掃描失敗：{e}")
+            self._char_labels = ["預設"]
+            self._char_values = ["default"]
+            self._char_var = tk.StringVar(value="預設")
+            tk.Label(g, text="（無法掃描）", font=("Arial", 9),
+                     fg="#aaa").grid(row=row, column=1, sticky="w", padx=10)
+        row += 1
 
         # ── 番茄鐘時間 ─────────────────────────────────────────
         tk.Label(g, text="🍅 工作時間（分）", font=("Arial",10), anchor="w"
