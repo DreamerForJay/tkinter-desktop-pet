@@ -877,16 +877,16 @@ class ShopView:
 
     def _build(self):
         w = self._win = tk.Toplevel(self._master)
-        w.title("🛍️ 寵物商店")
+        w.title("🛍️ 商店")
         w.config(bg=self.WIN_BG)
         w.resizable(False, False)
 
         # 標題
         hdr = tk.Frame(w, bg=self.HDR_BG, pady=14)
         hdr.pack(fill="x")
-        tk.Label(hdr, text="🛍️  寵物商店", font=("Arial", 16, "bold"),
+        tk.Label(hdr, text="🛍️  商店", font=("Arial", 16, "bold"),
                  bg=self.HDR_BG, fg="white").pack()
-        tk.Label(hdr, text="購買後存入背包，隨時餵食！",
+        tk.Label(hdr, text="購買後存入背包，隨時使用！",
                  font=("Arial", 9), bg=self.HDR_BG, fg="#FFCCBC").pack()
 
         # 狀態列
@@ -1062,7 +1062,7 @@ class StatsView:
         w = self._win = tk.Toplevel(self._master)
         w.title("📊 統計數據"); w.resizable(False, False)
         hdr = tk.Frame(w, bg="#E0F2F1", pady=10); hdr.pack(fill="x")
-        tk.Label(hdr, text="📊 寵物統計", font=("Arial", 14, "bold"),
+        tk.Label(hdr, text="📊 統計數據", font=("Arial", 14, "bold"),
                  bg="#E0F2F1", fg="#004D40").pack()
         ttk.Separator(w).pack(fill="x", padx=12, pady=6)
         self._frame = tk.Frame(w, padx=24, pady=4); self._frame.pack()
@@ -1080,7 +1080,7 @@ class StatsView:
         hp = m.happiness
         hpc = "#C62828" if hp < 30 else ("#F57F17" if hp < 60 else "#2E7D32")
         rows = [
-            ("🐾","寵物名稱",  m.pet_name,              "#37474F"),
+            ("🎭","角色名稱",  m.pet_name,              "#37474F"),
             ("❤️","目前心情",  f"{hp}%",                hpc),
             ("💰","目前金幣",  f"{m.coins} 枚",         "#E65100"),
             ("🍅","完成番茄鐘",f"{s['pomodoro_done']} 次","#37474F"),
@@ -1125,7 +1125,7 @@ class SettingsView:
         row = 0
 
         # 寵物名稱
-        tk.Label(g, text="🐾 寵物名稱", font=("Arial",10), anchor="w"
+        tk.Label(g, text="🎭 角色名稱", font=("Arial",10), anchor="w"
                  ).grid(row=row, column=0, sticky="w", pady=5)
         self._name = tk.StringVar(value=self._ctrl.model.pet_name)
         tk.Entry(g, textvariable=self._name, width=14, font=("Arial",10)
@@ -1718,6 +1718,11 @@ class PetController:
         self._view.apply_window_settings(self._model.settings)
         self._view.update_character(character)
 
+    def switch_character(self, character: str):
+        """輕量角色切換，只更新角色設定、不動其他參數。"""
+        self._model.patch_settings(character=character)
+        self._view.update_character(character)
+
     # ── 右鍵選單 ──────────────────────────────────────────────
 
     def show_menu(self, event):
@@ -1736,7 +1741,7 @@ class PetController:
         menu = tk.Menu(self._root, tearoff=0, font=FNT)
 
         # ── 寵物資訊（唯讀）────────────────────────────────────
-        menu.add_command(label=f"  🐾  {m.pet_name}",
+        menu.add_command(label=f"  🎭  {m.pet_name}",
                          state="disabled", font=FNT_BD)
         hp     = m.happiness
         hp_bar = "♥" * (hp // 25) + "♡" * (4 - hp // 25)
@@ -1753,6 +1758,20 @@ class PetController:
         menu.add_command(label="  📚  讀書",   command=self.do_studying)
         menu.add_command(label="  💤  睡覺",   command=self.do_sleep)
         menu.add_separator()
+
+        # ── 切換角色 ─────────────────────────────────────────
+        chars = _list_characters()
+        if len(chars) > 1:
+            cur_char = m.settings.get("character", "default")
+            char_menu = tk.Menu(menu, tearoff=0, font=FNT)
+            for lbl, val in chars:
+                indicator = "  ✓  " if val == cur_char else "      "
+                char_menu.add_command(
+                    label=f"{indicator}{lbl}",
+                    command=lambda v=val: self.switch_character(v),
+                )
+            menu.add_cascade(label="  🎨  切換角色", menu=char_menu)
+            menu.add_separator()
 
         # ── 商店 & 背包 ───────────────────────────────────────
         bag_n     = sum(v for v in inv.values() if v > 0)
