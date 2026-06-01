@@ -1425,20 +1425,28 @@ FAREWELL_LINES = [
 
 
 class FarewellScreen:
-    """放生告別動畫（Toplevel），文字逐行打字機效果 + 角色漸遠動畫。
+    """放生告別動畫（Toplevel）。
+    日落天空場景 + chibi 角色漸遠 + 打字機台詞卡片。
     callback: on_complete(char_id)
     """
-    W, H = 560, 620
+    W, H     = 580, 680
+    CVS_H    = 220
     CHARS_PER_FRAME = 3
-    LINE_WAIT_FRAMES = 40
-    WALK_START_LINE = 3
+    LINE_WAIT_FRAMES = 38
+    WALK_START_LINE  = 3
+
+    # 日落天空色帶（由上至下）
+    _SKY = ["#0B0C1A","#131530","#1E1850","#3A1F5C",
+            "#5C2358","#8B3050","#B5402A","#D45E20","#E88030"]
+    # 草地色帶
+    _GRASS = ["#0A2014","#0D2A1A","#112E1E","#153524","#1A3D28"]
 
     def __init__(self, root: tk.Tk, char_name: str, char_id: str,
                  char_color: str, on_complete):
-        self._root       = root
-        self._name       = char_name
-        self._char_id    = char_id
-        self._color      = f"#{char_color}"
+        self._root        = root
+        self._name        = char_name
+        self._char_id     = char_id
+        self._color       = f"#{char_color}"
         self._on_complete = on_complete
 
         self._frame    = 0
@@ -1446,18 +1454,25 @@ class FarewellScreen:
         self._line_idx = 0
         self._reveal   = 0.0
         self._wait     = 0
-        self._pet_x    = self.W // 2
+        self._pet_x    = float(self.W // 2)
         self._walking  = False
         self._done_txt = False
+        self._footprints: list = []
+
+        # 隨機星星位置（只用在放生場景，不重用 _EGG_STARS 避免混用）
+        self._stars = [(random.randint(0, self.W), random.randint(0, int(self.CVS_H * 0.55)))
+                       for _ in range(45)]
 
         self._build()
         self._tick()
 
+    # ── UI 建構 ─────────────────────────────────────────────────
+
     def _build(self):
         win = self._win = tk.Toplevel(self._root)
-        win.title("告別")
+        win.title("放生告別")
         win.resizable(False, False)
-        win.configure(bg="#1A1B2E")
+        win.configure(bg="#0B0C1A")
         win.wm_attributes("-topmost", True)
         win.grab_set()
         win.protocol("WM_DELETE_WINDOW", lambda: None)
@@ -1466,34 +1481,44 @@ class FarewellScreen:
         sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
         win.geometry(f"{self.W}x{self.H}+{(sw-self.W)//2}+{(sh-self.H)//2}")
 
-        tk.Label(win, text="⛩️  放生告別", bg="#1A1B2E", fg="#FFFFFF",
-                 font=("Microsoft JhengHei", 16, "bold")).pack(pady=(16, 4))
+        # 頂部標題
+        hdr = tk.Frame(win, bg="#0B0C1A")
+        hdr.pack(fill="x", padx=24, pady=(16, 4))
+        tk.Label(hdr, text="⛩️  放生告別", bg="#0B0C1A", fg="#FFD580",
+                 font=("Microsoft JhengHei", 17, "bold"), anchor="w").pack(side="left")
+        tk.Label(hdr, text=f"「{self._name}」的旅程", bg="#0B0C1A",
+                 fg="#AA8855", font=("Microsoft JhengHei", 11), anchor="e").pack(side="right")
 
-        # 場景畫布（寵物走路動畫）
-        self._cvs = tk.Canvas(win, width=self.W-40, height=160,
-                               bg="#0D1117", highlightthickness=0)
-        self._cvs.pack(padx=20, pady=8)
+        # 場景畫布
+        self._cvs = tk.Canvas(win, width=self.W, height=self.CVS_H,
+                               bg="#0B0C1A", highlightthickness=0)
+        self._cvs.pack()
 
-        # 劇情文字框
-        txt_frame = tk.Frame(win, bg="#252640", padx=16, pady=12)
-        txt_frame.pack(fill="both", expand=True, padx=20, pady=4)
+        # 分隔線
+        sep = tk.Frame(win, height=1, bg="#2A2040")
+        sep.pack(fill="x", padx=0)
 
-        self._txt = tk.Text(
-            txt_frame, wrap="word", height=8,
-            bg="#252640", fg="#E0E0FF",
-            font=("Microsoft JhengHei", 11),
-            relief="flat", state="disabled",
-            insertbackground="#E0E0FF",
-        )
-        self._txt.pack(fill="both", expand=True)
+        # 台詞卡片區
+        card = tk.Frame(win, bg="#12112A")
+        card.pack(fill="both", expand=True, padx=0)
 
-        # 送別按鈕（結束後顯示）
+        # 建立 8 個 Label 預留位，每行一個
+        self._line_lbls: list[tk.Label] = []
+        for _ in range(len(FAREWELL_LINES)):
+            lbl = tk.Label(card, text="", bg="#12112A",
+                           fg="#C8C8E8", wraplength=self.W - 48,
+                           font=("Microsoft JhengHei", 11),
+                           anchor="w", justify="left", padx=24, pady=3)
+            lbl.pack(fill="x")
+            self._line_lbls.append(lbl)
+
+        # 底部送別按鈕（劇情結束後才 pack）
         self._bye_btn = tk.Button(
-            win, text="✨  送別，一路好走",
-            font=("Microsoft JhengHei", 12, "bold"),
-            bg="#6C5CE7", fg="white",
-            activebackground="#8B7CF8",
-            relief="flat", padx=24, pady=10, cursor="hand2",
+            win, text="✨  送別，一路好走  ✨",
+            font=("Microsoft JhengHei", 13, "bold"),
+            bg="#C87020", fg="#FFF8E1",
+            activebackground="#E89030", activeforeground="#FFFFFF",
+            relief="flat", padx=28, pady=12, cursor="hand2",
             command=self._finish
         )
 
@@ -1502,60 +1527,139 @@ class FarewellScreen:
     def _tick(self):
         if not self._running: return
         self._frame += 1
-        self._update_scene()
+        self._draw_scene()
         self._update_text()
         self._win.after(50, self._tick)
 
-    def _update_scene(self):
+    # ── 場景繪製 ─────────────────────────────────────────────────
+
+    def _draw_scene(self):
         c = self._cvs
         c.delete("all")
-        W, H = self.W - 40, 160
+        W, H = self.W, self.CVS_H
+        sky_n   = len(self._SKY)
+        grass_n = len(self._GRASS)
+        ground_y = int(H * 0.62)
 
-        # 草原背景
-        c.create_rectangle(0, 0, W, H, fill="#0D1117", outline="")
-        c.create_rectangle(0, H*0.6, W, H, fill="#1E3A2F", outline="")
+        # 天空色帶
+        for i, col in enumerate(self._SKY):
+            y0 = int(i * ground_y / sky_n)
+            y1 = int((i+1) * ground_y / sky_n)
+            c.create_rectangle(0, y0, W, y1, fill=col, outline="")
 
-        # 星星
-        for i, (sx, sy) in enumerate(_EGG_STARS[:30]):
-            sx = sx % W
-            sy = int(sy * 0.4)
-            r = 1 if (self._frame // 12 + i) % 3 else 1.5
-            c.create_oval(sx-r, sy-r, sx+r, sy+r, fill="white", outline="")
+        # 草地色帶
+        for i, col in enumerate(self._GRASS):
+            y0 = ground_y + int(i * (H - ground_y) / grass_n)
+            y1 = ground_y + int((i+1) * (H - ground_y) / grass_n)
+            c.create_rectangle(0, y0, W, y1, fill=col, outline="")
 
-        # 角色圖示（簡單色塊 + 眼睛）
+        # 地平線橙光
+        for g in range(6):
+            gy = ground_y - g * 4
+            bright = ["#FF9020","#E07818","#C05C10","#A04408","#803408","#602C06"][g]
+            c.create_rectangle(0, gy, W, gy+4, fill=bright, outline="")
+
+        # 遠山剪影
+        pts = [0, ground_y]
+        for xi in range(0, W+1, 30):
+            pts += [xi, ground_y - 18 - int(14 * math.sin(xi * 0.07))]
+        pts += [W, ground_y]
+        c.create_polygon(pts, fill="#0A1A0F", outline="")
+
+        # 月亮
+        mx, my = int(W * 0.83), 28
+        c.create_oval(mx-16, my-16, mx+16, my+16, fill="#FFF5CC", outline="#FFE080", width=1)
+        c.create_oval(mx-10, my-18, mx+8, my+18, fill=self._SKY[1], outline="")
+
+        # 星星（閃爍）
+        for i, (sx, sy) in enumerate(self._stars):
+            blink = (self._frame // 10 + i) % 18
+            if sy > ground_y * 0.8: continue
+            r = 2.0 if blink < 14 else 1.0
+            c.create_oval(sx-r, sy-r, sx+r, sy+r, fill="#FFFDE0", outline="")
+
+        # 小路（橢圓透視感）
+        path_y = ground_y + 8
+        c.create_oval(W//2 - 40, path_y, W//2 + 40, path_y + 8,
+                      fill="#1E3A28", outline="#2A4A35", width=1)
+
+        # 腳印（走路後留下）
+        for fp in self._footprints:
+            fx, fy, fa = fp
+            fc_val = max(0, int(40 * fa))
+            fc = f"#{fc_val:02x}{fc_val+10:02x}{fc_val:02x}"
+            c.create_oval(fx-3, fy-2, fx+3, fy+2, fill=fc, outline="")
+
+        # 角色主體
         px = int(self._pet_x)
-        py = H - 42
-        bob = int(math.sin(self._frame * 0.3) * 3) if self._walking else 0
-        sz = max(6, int(28 * (1 - (px / W) * 0.65)))
+        py = ground_y - 4
+        progress = max(0.0, (px - self.W * 0.4) / (self.W * 0.6))
+        scale = max(0.15, 1.0 - progress * 0.82)
+        bob = int(math.sin(self._frame * 0.35) * 4 * scale) if self._walking else 0
 
-        c.create_oval(px-sz, py-sz*2+bob, px+sz, py+bob,
-                      fill=self._color, outline="")
+        self._draw_chibi(c, px, py + bob, scale)
+
+        # 走路更新
+        if self._walking and px < W + 60:
+            self._pet_x += 1.8 * (0.5 + progress * 0.5)
+            if self._frame % 12 == 0:
+                fp_alpha = max(0.1, 1.0 - progress)
+                self._footprints.append([px - 8, py + 4, fp_alpha])
+            self._footprints = [[fx, fy, fa * 0.97] for fx, fy, fa in self._footprints
+                                 if fa > 0.05]
+
+    def _draw_chibi(self, c, px: int, py: int, scale: float):
+        """繪製簡潔 chibi 角色：頭＋身體＋耳朵＋眼睛＋光澤。"""
+        col  = self._color
+        r_h  = int(20 * scale)   # 頭半徑
+        r_b  = int(14 * scale)   # 身體半徑
+        ey   = py - r_h * 2      # 頭頂
+
+        # 陰影
+        c.create_oval(px - r_b, py, px + r_b, py + int(5 * scale),
+                      fill="#081008", outline="")
+
+        # 身體
+        c.create_oval(px - r_b, py - r_b * 2, px + r_b, py,
+                      fill=col, outline="")
+
+        # 頭
+        c.create_oval(px - r_h, ey, px + r_h, ey + r_h * 2,
+                      fill=col, outline="")
+
+        # 耳朵
+        er = max(3, int(8 * scale))
+        c.create_oval(px - r_h + 2, ey - er + 2, px - r_h + 2 + er*2, ey + er + 2,
+                      fill=col, outline="")
+        c.create_oval(px + r_h - 2 - er*2, ey - er + 2, px + r_h - 2, ey + er + 2,
+                      fill=col, outline="")
+
         # 眼睛
-        if sz > 8:
-            eo = sz // 3
-            c.create_oval(px-eo-2, py-sz*2+bob+sz//2-2,
-                          px-eo+2, py-sz*2+bob+sz//2+2,
-                          fill="white", outline="")
-            c.create_oval(px+eo-2, py-sz*2+bob+sz//2-2,
-                          px+eo+2, py-sz*2+bob+sz//2+2,
-                          fill="white", outline="")
+        if r_h >= 6:
+            eo = max(2, int(6 * scale))
+            er2 = max(2, int(4 * scale))
+            for ex_off in (-eo, eo):
+                c.create_oval(px + ex_off - er2, ey + r_h - er2 * 2,
+                              px + ex_off + er2, ey + r_h + er2 * 2 - 4,
+                              fill="white", outline="")
+                dot = max(1, int(2 * scale))
+                c.create_oval(px + ex_off - dot, ey + r_h - dot * 2 - 2,
+                              px + ex_off + dot, ey + r_h + dot * 2 - 2,
+                              fill="#222222", outline="")
 
-        # 走路（超出畫面則停）
-        if self._walking and px < W + 40:
-            self._pet_x += 1.5
+        # 頭上光澤
+        if r_h >= 8:
+            c.create_oval(px - int(r_h * 0.4), ey + int(r_h * 0.2),
+                          px,                   ey + int(r_h * 0.7),
+                          fill="white", outline="", stipple="gray50")
 
-        # 金光地平線
-        glow_y = int(H * 0.6)
-        for g in range(4):
-            alpha_c = ["#3D2B00", "#5C4200", "#7A5800", "#996E00"][g]
-            c.create_rectangle(0, glow_y + g*3, W, glow_y + g*3 + 3,
-                                fill=alpha_c, outline="")
+    # ── 打字機文字 ───────────────────────────────────────────────
 
     def _update_text(self):
         if self._done_txt: return
         if self._line_idx >= len(FAREWELL_LINES):
             self._done_txt = True
-            self._bye_btn.pack(pady=8)
+            self._bye_btn.pack(side="bottom", pady=10)
             return
 
         if self._wait > 0:
@@ -1566,22 +1670,23 @@ class FarewellScreen:
         self._reveal += self.CHARS_PER_FRAME
         shown = line[:int(self._reveal)]
 
-        self._txt.config(state="normal")
-        self._txt.delete("1.0", "end")
-        for i, ln in enumerate(FAREWELL_LINES[:self._line_idx]):
-            self._txt.insert("end", ln.format(name=self._name) + "\n",
-                             "dim" if i < self._line_idx - 1 else "")
-        self._txt.insert("end", shown)
-        self._txt.tag_config("dim", foreground="#555577")
-        self._txt.see("end")
-        self._txt.config(state="disabled")
+        # 更新目前行
+        lbl = self._line_lbls[self._line_idx]
+        lbl.config(text=shown, fg="#FFFFFF", font=("Microsoft JhengHei", 11, "bold"))
 
         if int(self._reveal) >= len(line):
+            # 目前行完成 → 降調
+            lbl.config(fg="#8888AA", font=("Microsoft JhengHei", 11))
+            # 最後一行特別保留亮色
+            if self._line_idx == len(FAREWELL_LINES) - 1:
+                lbl.config(fg="#FFD080", font=("Microsoft JhengHei", 11, "bold"))
             self._line_idx += 1
             self._reveal = 0.0
             self._wait = self.LINE_WAIT_FRAMES
             if self._line_idx >= self.WALK_START_LINE:
                 self._walking = True
+
+    # ── 完成 ─────────────────────────────────────────────────────
 
     def _finish(self):
         self._running = False
