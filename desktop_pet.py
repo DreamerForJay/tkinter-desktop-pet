@@ -338,6 +338,12 @@ class PetModel:
             chars.append(char_id)
             self._dirty()
 
+    def remove_unlocked_char(self, char_id: str):
+        chars = self._d.get("unlocked_chars", [])
+        if char_id in chars:
+            chars.remove(char_id)
+            self._dirty()
+
     def add_inv(self, item_id: str, qty: int = 1):
         inv = self._d["inventory"]
         inv[item_id] = inv.get(item_id, 0) + qty
@@ -1404,6 +1410,187 @@ class EggGachaScreen:
             self._on_complete(char_id, pet_name)
 
 
+# ── 放生告別畫面 ─────────────────────────────────────────────
+
+FAREWELL_LINES = [
+    "你走近 {name}，輕聲說：「是時候讓你自由了...」",
+    "{name} 抬起頭，用溫柔的眼神凝視著你。",
+    "牠輕輕地蹭了蹭你的手，好像在道謝。",
+    "然後，緩緩轉身，朝著遠方邁出第一步。",
+    "「{name}——」你忍不住輕喚了一聲。",
+    "牠停下腳步，回頭對你眨了眨眼，微微笑了。",
+    "轉身，踏入那片閃著金光的廣闊草原...",
+    "感謝你曾給予的每一份愛與陪伴。\n再見了，{name}。願你自由快樂。 💕",
+]
+
+
+class FarewellScreen:
+    """放生告別動畫（Toplevel），文字逐行打字機效果 + 角色漸遠動畫。
+    callback: on_complete(char_id)
+    """
+    W, H = 560, 620
+    CHARS_PER_FRAME = 3
+    LINE_WAIT_FRAMES = 40
+    WALK_START_LINE = 3
+
+    def __init__(self, root: tk.Tk, char_name: str, char_id: str,
+                 char_color: str, on_complete):
+        self._root       = root
+        self._name       = char_name
+        self._char_id    = char_id
+        self._color      = f"#{char_color}"
+        self._on_complete = on_complete
+
+        self._frame    = 0
+        self._running  = True
+        self._line_idx = 0
+        self._reveal   = 0.0
+        self._wait     = 0
+        self._pet_x    = self.W // 2
+        self._walking  = False
+        self._done_txt = False
+
+        self._build()
+        self._tick()
+
+    def _build(self):
+        win = self._win = tk.Toplevel(self._root)
+        win.title("告別")
+        win.resizable(False, False)
+        win.configure(bg="#1A1B2E")
+        win.wm_attributes("-topmost", True)
+        win.grab_set()
+        win.protocol("WM_DELETE_WINDOW", lambda: None)
+
+        win.update_idletasks()
+        sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
+        win.geometry(f"{self.W}x{self.H}+{(sw-self.W)//2}+{(sh-self.H)//2}")
+
+        tk.Label(win, text="⛩️  放生告別", bg="#1A1B2E", fg="#FFFFFF",
+                 font=("Microsoft JhengHei", 16, "bold")).pack(pady=(16, 4))
+
+        # 場景畫布（寵物走路動畫）
+        self._cvs = tk.Canvas(win, width=self.W-40, height=160,
+                               bg="#0D1117", highlightthickness=0)
+        self._cvs.pack(padx=20, pady=8)
+
+        # 劇情文字框
+        txt_frame = tk.Frame(win, bg="#252640", padx=16, pady=12)
+        txt_frame.pack(fill="both", expand=True, padx=20, pady=4)
+
+        self._txt = tk.Text(
+            txt_frame, wrap="word", height=8,
+            bg="#252640", fg="#E0E0FF",
+            font=("Microsoft JhengHei", 11),
+            relief="flat", state="disabled",
+            insertbackground="#E0E0FF",
+        )
+        self._txt.pack(fill="both", expand=True)
+
+        # 送別按鈕（結束後顯示）
+        self._bye_btn = tk.Button(
+            win, text="✨  送別，一路好走",
+            font=("Microsoft JhengHei", 12, "bold"),
+            bg="#6C5CE7", fg="white",
+            activebackground="#8B7CF8",
+            relief="flat", padx=24, pady=10, cursor="hand2",
+            command=self._finish
+        )
+
+    # ── 動畫主迴圈 ──────────────────────────────────────────────
+
+    def _tick(self):
+        if not self._running: return
+        self._frame += 1
+        self._update_scene()
+        self._update_text()
+        self._win.after(50, self._tick)
+
+    def _update_scene(self):
+        c = self._cvs
+        c.delete("all")
+        W, H = self.W - 40, 160
+
+        # 草原背景
+        c.create_rectangle(0, 0, W, H, fill="#0D1117", outline="")
+        c.create_rectangle(0, H*0.6, W, H, fill="#1E3A2F", outline="")
+
+        # 星星
+        for i, (sx, sy) in enumerate(_EGG_STARS[:30]):
+            sx = sx % W
+            sy = int(sy * 0.4)
+            r = 1 if (self._frame // 12 + i) % 3 else 1.5
+            c.create_oval(sx-r, sy-r, sx+r, sy+r, fill="white", outline="")
+
+        # 角色圖示（簡單色塊 + 眼睛）
+        px = int(self._pet_x)
+        py = H - 42
+        bob = int(math.sin(self._frame * 0.3) * 3) if self._walking else 0
+        sz = max(6, int(28 * (1 - (px / W) * 0.65)))
+
+        c.create_oval(px-sz, py-sz*2+bob, px+sz, py+bob,
+                      fill=self._color, outline="")
+        # 眼睛
+        if sz > 8:
+            eo = sz // 3
+            c.create_oval(px-eo-2, py-sz*2+bob+sz//2-2,
+                          px-eo+2, py-sz*2+bob+sz//2+2,
+                          fill="white", outline="")
+            c.create_oval(px+eo-2, py-sz*2+bob+sz//2-2,
+                          px+eo+2, py-sz*2+bob+sz//2+2,
+                          fill="white", outline="")
+
+        # 走路（超出畫面則停）
+        if self._walking and px < W + 40:
+            self._pet_x += 1.5
+
+        # 金光地平線
+        glow_y = int(H * 0.6)
+        for g in range(4):
+            alpha_c = ["#3D2B00", "#5C4200", "#7A5800", "#996E00"][g]
+            c.create_rectangle(0, glow_y + g*3, W, glow_y + g*3 + 3,
+                                fill=alpha_c, outline="")
+
+    def _update_text(self):
+        if self._done_txt: return
+        if self._line_idx >= len(FAREWELL_LINES):
+            self._done_txt = True
+            self._bye_btn.pack(pady=8)
+            return
+
+        if self._wait > 0:
+            self._wait -= 1
+            return
+
+        line = FAREWELL_LINES[self._line_idx].format(name=self._name)
+        self._reveal += self.CHARS_PER_FRAME
+        shown = line[:int(self._reveal)]
+
+        self._txt.config(state="normal")
+        self._txt.delete("1.0", "end")
+        for i, ln in enumerate(FAREWELL_LINES[:self._line_idx]):
+            self._txt.insert("end", ln.format(name=self._name) + "\n",
+                             "dim" if i < self._line_idx - 1 else "")
+        self._txt.insert("end", shown)
+        self._txt.tag_config("dim", foreground="#555577")
+        self._txt.see("end")
+        self._txt.config(state="disabled")
+
+        if int(self._reveal) >= len(line):
+            self._line_idx += 1
+            self._reveal = 0.0
+            self._wait = self.LINE_WAIT_FRAMES
+            if self._line_idx >= self.WALK_START_LINE:
+                self._walking = True
+
+    def _finish(self):
+        self._running = False
+        char_id = self._char_id
+        try: self._win.destroy()
+        except Exception: pass
+        self._on_complete(char_id)
+
+
 # ── 商店視窗 ─────────────────────────────────────────────────
 
 class ShopView:
@@ -2285,6 +2472,25 @@ class PetController:
     def _show_egg_screen(self):
         EggGachaScreen(self._root, on_complete=self._on_egg_hatched)
 
+    def farewell_char(self, char_id: str):
+        """觸發放生告別動畫。"""
+        info = GACHA_POOL.get(char_id, {})
+        FarewellScreen(
+            self._root,
+            char_name=info.get("name", char_id),
+            char_id=char_id,
+            char_color=info.get("egg_color", "888888"),
+            on_complete=self._on_farewell_done,
+        )
+
+    def _on_farewell_done(self, char_id: str):
+        if self._model.settings.get("character") == char_id:
+            self.switch_character("default")
+        self._model.remove_unlocked_char(char_id)
+        self._model.sync_save()
+        info = GACHA_POOL.get(char_id, {})
+        self._view.show_info("⛩️ 放生", f"「{info.get('name', char_id)}」已自由啟程。\n感謝你的陪伴。")
+
     def _on_egg_hatched(self, char_id: str, pet_name: str):
         if pet_name:
             self._model.pet_name = pet_name
@@ -2334,6 +2540,11 @@ class PetController:
                 "label": f"  {indicator}{lbl}",
                 "cmd": lambda v=val: self.switch_character(v),
             })
+            if val in GACHA_POOL:
+                char_subitems.append({
+                    "label": f"      ⛩️ 放生 {lbl}",
+                    "cmd": lambda v=val: self.farewell_char(v),
+                })
 
         # ── 快速餵食子選單 ────────────────────────────────────
         foods = [(iid, cnt) for iid, cnt in inv.items() if iid in FOOD_IDS and cnt > 0]
