@@ -26,7 +26,7 @@
 """
 
 # ── 標準庫 ────────────────────────────────────────────────────
-import sys, os, json, threading, queue, random, time, re
+import sys, os, json, threading, queue, random, time, re, math
 from datetime import date
 
 
@@ -154,6 +154,25 @@ DIALOGUES: dict = {
     ],
 }
 
+FREE_CHARS = {"default", "小紫"}
+
+GACHA_POOL = {
+    "cat":     {"name":"橘橘貓咪", "rarity":"普通", "rarity_color":"78909C",
+                "egg_color":"FF8C42", "desc":"一隻調皮的橘貓，愛撒嬌！"},
+    "bunny":   {"name":"雪白兔兔", "rarity":"普通", "rarity_color":"78909C",
+                "egg_color":"F4C2C2", "desc":"圓滾滾的雪白兔子！"},
+    "penguin": {"name":"企鵝紳士", "rarity":"稀有", "rarity_color":"42A5F5",
+                "egg_color":"2C3E50", "desc":"搖搖擺擺的小紳士！"},
+    "fox":     {"name":"狡黠狐狸", "rarity":"稀有", "rarity_color":"42A5F5",
+                "egg_color":"E8572E", "desc":"聰明伶俐，愛惡作劇！"},
+    "dragon":  {"name":"神秘小龍", "rarity":"傳說", "rarity_color":"FFD700",
+                "egg_color":"7B2FBE", "desc":"千年一見的珍稀生物！"},
+}
+GACHA_WEIGHTS = {"cat": 35, "bunny": 30, "penguin": 18, "fox": 12, "dragon": 5}
+
+# 孵蛋背景星星（模組載入時隨機生成一次）
+_EGG_STARS = [(random.randint(5, 435), random.randint(5, 350)) for _ in range(50)]
+
 SHOP_FOOD = [
     {"id":"apple",  "name":"蘋果",    "icon":"🍎","cost":2, "hp":15,"desc":"心情 +15"},
     {"id":"boba",   "name":"珍珠奶茶","icon":"🧋","cost":3, "hp":20,"desc":"心情 +20"},
@@ -167,6 +186,7 @@ SHOP_ITEMS = [
     {"id":"giftbox","name":"神秘禮盒","icon":"🎁","cost":12,"desc":"隨機 5~30 金幣"},
     {"id":"rune",   "name":"加倍符文","icon":"⚡","cost":15,"desc":"下個番茄鐘 ×2"},
     {"id":"ribbon", "name":"蝴蝶結",  "icon":"🎀","cost":20,"desc":"可愛裝飾品"},
+    {"id":"egg",    "name":"角色蛋",  "icon":"🥚","cost":30,"desc":"孵出隨機新角色"},
 ]
 FOOD_IDS  = frozenset(i["id"] for i in SHOP_FOOD)
 FOOD_MAP  = {i["id"]: i for i in SHOP_FOOD}
@@ -174,12 +194,14 @@ ITEM_MAP  = {i["id"]: i for i in SHOP_ITEMS}
 ALL_ITEMS = {**FOOD_MAP, **ITEM_MAP}
 
 DEFAULT_DATA: dict = {
-    "pet_name":     "小白",
-    "coins":        0,
-    "happiness":    100,
-    "bonus_mult":   1,
-    "last_checkin": "",
-    "inventory":    {},
+    "pet_name":      "小白",
+    "coins":         0,
+    "happiness":     100,
+    "bonus_mult":    1,
+    "last_checkin":  "",
+    "inventory":     {},
+    "first_launch":  True,
+    "unlocked_chars": [],
     "stats": {"pomodoro_done":0,"coins_earned":0,"coins_spent":0,"items_used":0},
     "settings": {
         "work_min":25,"rest_min":5,"long_rest_min":15,
@@ -302,6 +324,20 @@ class PetModel:
     def last_checkin(self, v: str):
         self._d["last_checkin"] = v; self._dirty()
 
+    @property
+    def first_launch(self) -> bool:  return self._d.get("first_launch", True)
+    @first_launch.setter
+    def first_launch(self, v: bool): self._d["first_launch"] = v; self._dirty()
+
+    @property
+    def unlocked_chars(self) -> list: return self._d.get("unlocked_chars", [])
+
+    def add_unlocked_char(self, char_id: str):
+        chars = self._d.setdefault("unlocked_chars", [])
+        if char_id not in chars:
+            chars.append(char_id)
+            self._dirty()
+
     def add_inv(self, item_id: str, qty: int = 1):
         inv = self._d["inventory"]
         inv[item_id] = inv.get(item_id, 0) + qty
@@ -337,9 +373,9 @@ class PetModel:
 # LAYER 2 — SERVICES（不含 tkinter，可單獨測試）
 # ════════════════════════════════════════════════════════════════
 
-def _list_characters() -> list[tuple[str, str]]:
-    """掃描 assets/ 找出含動畫子目錄的角色，回傳 [(顯示名, 資料夾名)]。
-    顯示名優先從 assets/characters.json 讀取，沒有則用資料夾名。"""
+def _list_characters(unlocked_chars=None) -> list[tuple[str, str]]:
+    """掃描 assets/ 找出可用角色，回傳 [(顯示名, 資料夾/ID)]。
+    FREE_CHARS 永遠顯示；unlocked_chars 列出已解鎖的抽蛋角色。"""
     STATES = ("idle", "coding", "studying", "eating", "drag")
     assets = resource_path("assets")
 
@@ -353,16 +389,22 @@ def _list_characters() -> list[tuple[str, str]]:
             print(f"[Characters] 讀取名稱設定失敗：{e}")
 
     result = [(name_map.get("default", "預設"), "default")]
-    if not os.path.isdir(assets):
-        return result
-    for folder in sorted(os.listdir(assets)):
-        if folder == "default":
-            continue
-        subdir = os.path.join(assets, folder)
-        if os.path.isdir(subdir) and any(
-            os.path.isdir(os.path.join(subdir, s)) for s in STATES
-        ):
-            result.append((name_map.get(folder, folder), folder))
+    if os.path.isdir(assets):
+        for folder in sorted(os.listdir(assets)):
+            if folder == "default":
+                continue
+            subdir = os.path.join(assets, folder)
+            if os.path.isdir(subdir) and any(
+                os.path.isdir(os.path.join(subdir, s)) for s in STATES
+            ):
+                result.append((name_map.get(folder, folder), folder))
+
+    # 加入已解鎖的抽蛋角色（即使資料夾尚未存在）
+    if unlocked_chars:
+        existing = {v for _, v in result}
+        for char_id in unlocked_chars:
+            if char_id in GACHA_POOL and char_id not in existing:
+                result.append((GACHA_POOL[char_id]["name"], char_id))
     return result
 
 
@@ -1067,6 +1109,301 @@ class _PopupMenu:
             top_menu.close_all()
 
 
+# ── 孵蛋抽角色畫面 ───────────────────────────────────────────
+
+class EggGachaScreen:
+    """孵蛋抽角色畫面（Toplevel overlay）。
+    首次啟動或購買角色蛋後顯示，點擊蛋 CLICKS_TO_HATCH 次後破殼。
+    callback: on_complete(char_id, pet_name)
+    """
+    CLICKS_TO_HATCH = 7
+    EGG_W, EGG_H    = 460, 330
+
+    _EGG_THEMES = [
+        {"main": "FFD700", "pattern": "FFA500", "glow": "FFF9C4", "name": "金色神蛋"},
+        {"main": "9C27B0", "pattern": "E040FB", "glow": "F3E5F5", "name": "魔法紫蛋"},
+        {"main": "1565C0", "pattern": "42A5F5", "glow": "E3F2FD", "name": "海洋藍蛋"},
+        {"main": "C62828", "pattern": "FF5252", "glow": "FFEBEE", "name": "炎熱紅蛋"},
+        {"main": "2E7D32", "pattern": "69F0AE", "glow": "E8F5E9", "name": "翡翠綠蛋"},
+    ]
+
+    def __init__(self, root: tk.Tk, on_complete):
+        self._root       = root
+        self._on_complete= on_complete
+        self._frame      = 0
+        self._phase      = "idle"
+        self._phase_t    = 0
+        self._click_cnt  = 0
+        self._shake_x    = 0
+        self._shake_f    = 0
+        self._cracks: list = []
+        self._particles: list = []
+        self._result     = None
+        self._pet_name   = ""
+        self._egg        = random.choice(self._EGG_THEMES)
+        self._running    = True
+
+        self._build()
+        self._tick()
+
+    # ── UI ──────────────────────────────────────────────────────
+
+    def _build(self):
+        win = self._win = tk.Toplevel(self._root)
+        win.title("🥚 孵蛋")
+        win.resizable(False, False)
+        win.configure(bg="#1A1B2E")
+        win.wm_attributes("-topmost", True)
+        win.grab_set()
+        win.protocol("WM_DELETE_WINDOW", lambda: None)  # 孵化中不可關閉
+
+        win.update_idletasks()
+        sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
+        win.geometry(f"520x760+{(sw-520)//2}+{(sh-760)//2}")
+
+        tk.Label(win, text="🥚  神秘之蛋", bg="#1A1B2E", fg="#FFFFFF",
+                 font=("Microsoft JhengHei", 18, "bold")).pack(pady=(18, 2))
+        tk.Label(win, text="一顆蘊含神秘力量的蛋正在等待你孵化…",
+                 bg="#1A1B2E", fg="#8888BB",
+                 font=("Microsoft JhengHei", 10)).pack(pady=(0, 4))
+
+        self._canvas = tk.Canvas(win, width=self.EGG_W, height=self.EGG_H,
+                                  bg="#1A1B2E", highlightthickness=0)
+        self._canvas.pack()
+
+        self._egg_name_var = tk.StringVar(value=f"✨  {self._egg['name']}  ✨")
+        tk.Label(win, textvariable=self._egg_name_var, bg="#1A1B2E",
+                 fg=f"#{self._egg['main']}",
+                 font=("Microsoft JhengHei", 12, "bold")).pack(pady=2)
+
+        # 名字輸入區
+        self._inp_frame = tk.Frame(win, bg="#252640", padx=20, pady=10)
+        self._inp_frame.pack(fill="x", padx=44, pady=6)
+        tk.Label(self._inp_frame, text="為你的新夥伴取個名字：",
+                 bg="#252640", fg="#CCCCEE",
+                 font=("Microsoft JhengHei", 10)).pack()
+        self._name_var = tk.StringVar()
+        self._entry = tk.Entry(
+            self._inp_frame, textvariable=self._name_var,
+            font=("Microsoft JhengHei", 13), bg="#1E1E38", fg="#FFFFFF",
+            insertbackground="#FFFFFF", relief="flat", justify="center", width=18
+        )
+        self._entry.pack(ipady=6, pady=4)
+        self._entry.focus()
+        self._entry.bind("<Return>", lambda e: self._confirm_name())
+        self._hint_var = tk.StringVar(value="2–8 個字，按 Enter 或點「確認」")
+        tk.Label(self._inp_frame, textvariable=self._hint_var, bg="#252640",
+                 fg="#7777AA", font=("Microsoft JhengHei", 9)).pack()
+
+        self._confirm_btn = tk.Button(
+            win, text="確認名字，開始孵化！",
+            font=("Microsoft JhengHei", 11, "bold"),
+            bg="#6C5CE7", fg="white",
+            activebackground="#8B7CF8", activeforeground="white",
+            relief="flat", padx=24, pady=8, cursor="hand2",
+            command=self._confirm_name
+        )
+        self._confirm_btn.pack(pady=4)
+
+        self._status_var = tk.StringVar(value="")
+        tk.Label(win, textvariable=self._status_var, bg="#1A1B2E",
+                 fg="#E84393", font=("Microsoft JhengHei", 11, "bold")).pack(pady=2)
+
+        self._claim_btn = tk.Button(
+            win, text="✨ 確認領取！",
+            font=("Microsoft JhengHei", 12, "bold"),
+            bg="#E84393", fg="white",
+            activebackground="#FF5AB0", activeforeground="white",
+            relief="flat", padx=28, pady=10, cursor="hand2",
+            command=self._claim
+        )
+
+    # ── 互動 ────────────────────────────────────────────────────
+
+    def _confirm_name(self):
+        name = self._name_var.get().strip()
+        if not name:
+            self._hint_var.set("⚠ 請先幫你的夥伴取個名字！"); return
+        if len(name) > 8:
+            self._hint_var.set("⚠ 名字最多 8 個字哦！"); return
+        self._pet_name = name
+        self._inp_frame.pack_forget()
+        self._confirm_btn.pack_forget()
+        self._phase = "waiting"
+        self._status_var.set(f"點擊蛋孵化！還需 {self.CLICKS_TO_HATCH} 下 🥚")
+        self._canvas.config(cursor="hand2")
+        self._canvas.bind("<Button-1>", self._on_click)
+
+    def _on_click(self, _=None):
+        if self._phase != "waiting":
+            return
+        self._click_cnt += 1
+        remaining = self.CLICKS_TO_HATCH - self._click_cnt
+        self._shake_x = 16
+        self._shake_f = 12
+
+        templates = [
+            (-15,-60,-30,-10), (-30,-10,-10,30),
+            (5,-70,20,-20),    (20,-20,35,20),
+            (-5,-55,15,-5),    (-40,0,-15,40),
+            (30,-40,45,10),
+        ]
+        idx = self._click_cnt - 1
+        if idx < len(templates):
+            self._cracks.append(templates[idx])
+
+        if remaining <= 0:
+            self._status_var.set("💥 破殼而出！！")
+            self._phase = "explode"
+            self._phase_t = 0
+            ex, ey = self.EGG_W // 2, self.EGG_H // 2 - 10
+            self._gen_explosion(ex, ey)
+            self._result = random.choices(
+                list(GACHA_POOL.keys()),
+                weights=[GACHA_WEIGHTS[k] for k in GACHA_POOL.keys()],
+                k=1
+            )[0]
+        else:
+            self._status_var.set(f"繼續點！還需 {remaining} 下 💥")
+
+    # ── 動畫 ────────────────────────────────────────────────────
+
+    def _tick(self):
+        if not self._running:
+            return
+        self._frame += 1
+        self._phase_t += 1
+        self._draw()
+        self._win.after(50, self._tick)
+
+    def _draw(self):
+        c = self._canvas
+        c.delete("all")
+        self._draw_bg(c)
+        ex, ey = self.EGG_W // 2, self.EGG_H // 2 - 10
+
+        if self._shake_f > 0:
+            self._shake_f -= 1
+            sx = int(math.sin(self._shake_f * 1.8) * self._shake_x)
+        else:
+            sx = int(math.sin(self._frame * 0.07) * 2)
+
+        if self._phase in ("idle", "waiting"):
+            self._draw_egg(c, ex + sx, ey)
+            if self._cracks:
+                self._draw_cracks(c, ex + sx, ey)
+
+        elif self._phase == "explode":
+            if self._phase_t >= 35:
+                self._phase = "reveal"
+                self._phase_t = 0
+            self._tick_particles(c)
+
+        elif self._phase == "reveal":
+            self._tick_particles(c)
+            alpha = min(1.0, self._phase_t / 20)
+            if self._result:
+                self._draw_result(c, alpha)
+            if self._phase_t >= 28:
+                self._phase = "done"
+                self._show_claim()
+
+    def _draw_bg(self, c):
+        c.create_rectangle(0, 0, self.EGG_W, self.EGG_H, fill="#1A1B2E", outline="")
+        for i, (sx, sy) in enumerate(_EGG_STARS):
+            blink = (self._frame // 8 + i) % 20
+            r = 1.5 if blink < 15 else 2.5
+            c.create_oval(sx-r, sy-r, sx+r, sy+r, fill="white", outline="")
+
+    def _draw_egg(self, c, ex, ey):
+        t = self._egg
+        scale = 1 + math.sin(self._frame * 0.07) * 0.025 + min(self._click_cnt / 25, 0.08)
+        ew, eh = int(90 * scale), int(115 * scale)
+
+        glow_c = f"#{t['glow']}"
+        for gi in range(2 + self._click_cnt // 2):
+            g = (gi + 1) * 5
+            c.create_oval(ex-ew-g, ey-eh-g, ex+ew+g, ey+eh+g, fill="", outline=glow_c, width=1)
+
+        c.create_oval(ex-ew, ey-eh, ex+ew, ey+eh,
+                      fill=f"#{t['main']}", outline=f"#{t['pattern']}", width=3)
+        random.seed(42)
+        for _ in range(10):
+            px, py = random.randint(-50, 50), random.randint(-70, 60)
+            if (px/ew)**2 + (py/eh)**2 < 0.85:
+                r = random.randint(5, 12)
+                c.create_oval(ex+int(px*scale)-r, ey+int(py*scale)-r,
+                              ex+int(px*scale)+r, ey+int(py*scale)+r,
+                              fill=f"#{t['pattern']}", outline="")
+        random.seed()
+        c.create_oval(ex-int(ew*.45), ey-int(eh*.5), ex+int(ew*.1), ey+int(eh*.05),
+                      fill="#FFFFFF", outline="", stipple="gray50")
+
+    def _draw_cracks(self, c, ex, ey):
+        for x1, y1, x2, y2 in self._cracks:
+            c.create_line(ex+x1, ey+y1, ex+x2, ey+y2, fill="#1A1A2E", width=2)
+
+    def _draw_result(self, c, alpha):
+        if not self._result or self._result not in GACHA_POOL:
+            return
+        info = GACHA_POOL[self._result]
+        cx, cy = self.EGG_W // 2, self.EGG_H // 2
+        g = int(240 * alpha)
+        wc = f"#{g:02x}{g:02x}{min(255,g+15):02x}"
+        rh = info["rarity_color"]
+        ri = int(int(rh[0:2],16)*alpha)
+        gi = int(int(rh[2:4],16)*alpha)
+        bi = int(int(rh[4:6],16)*alpha)
+        rc = f"#{ri:02x}{gi:02x}{bi:02x}"
+        c.create_text(cx, cy-52, text="✨", font=("Segoe UI Emoji", 32), fill=wc)
+        c.create_text(cx, cy-8,  text=info["name"],
+                      font=("Microsoft JhengHei", 22, "bold"), fill=wc)
+        c.create_text(cx, cy+32, text=f"【{info['rarity']}】",
+                      font=("Microsoft JhengHei", 14, "bold"), fill=rc)
+        c.create_text(cx, cy+62, text=info["desc"],
+                      font=("Microsoft JhengHei", 11), fill=wc)
+
+    def _gen_explosion(self, ex, ey):
+        t = self._egg
+        colors = [f"#{t['main']}", f"#{t['pattern']}", "#FFFFFF", "#FFD700", "#FF6B8A"]
+        self._particles = [{
+            "x": ex+random.randint(-20,20), "y": ey+random.randint(-20,20),
+            "dx": math.cos(a:=random.uniform(0, math.pi*2)) * (s:=random.uniform(3,12)),
+            "dy": math.sin(a) * s - 3,
+            "color": random.choice(colors),
+            "size": random.randint(4,14),
+            "life": 0, "max_life": random.randint(25,50),
+        } for _ in range(60)]
+
+    def _tick_particles(self, c):
+        alive = []
+        for p in self._particles:
+            p["x"] += p["dx"]; p["y"] += p["dy"]
+            p["dy"] += 0.2; p["life"] += 1
+            if p["life"] >= p["max_life"]: continue
+            alive.append(p)
+            a = 1 - p["life"] / p["max_life"]
+            r = max(1, int(p["size"] * a))
+            x, y = int(p["x"]), int(p["y"])
+            c.create_oval(x-r, y-r, x+r, y+r, fill=p["color"], outline="")
+        self._particles = alive
+
+    def _show_claim(self):
+        if not self._result: return
+        info = GACHA_POOL[self._result]
+        self._claim_btn.config(text=f"✨ 確認領取「{info['name']}」！")
+        self._claim_btn.pack(pady=8)
+        self._status_var.set("")
+
+    def _claim(self):
+        self._running = False
+        char_id, pet_name = self._result, self._pet_name
+        try: self._win.destroy()
+        except Exception: pass
+        if char_id:
+            self._on_complete(char_id, pet_name)
+
+
 # ── 商店視窗 ─────────────────────────────────────────────────
 
 class ShopView:
@@ -1346,7 +1683,7 @@ class SettingsView:
         tk.Label(g, text="🎨 外觀角色", font=("Arial",10), anchor="w"
                  ).grid(row=row, column=0, sticky="w", pady=5)
         try:
-            chars = _list_characters()
+            chars = _list_characters(unlocked_chars=self._ctrl.model.unlocked_chars)
             self._char_labels = [c[0] for c in chars]
             self._char_values = [c[1] for c in chars]
             cur = self._ctrl.model.settings.get("character", "default")
@@ -1738,6 +2075,8 @@ class PetController:
         )
         view.set_controller(self)
         self._schedule_idle_chat()
+        if self._model.first_launch:
+            self._root.after(400, self._show_egg_screen)
 
     @property
     def model(self) -> PetModel:
@@ -1899,6 +2238,8 @@ class PetController:
         elif item_id == "ribbon":
             self._view.show_info("🎀 蝴蝶結",
                 f"{self._model.pet_name} 戴上了可愛的蝴蝶結～真漂亮！")
+        elif item_id == "egg":
+            self._show_egg_screen()
 
     def daily_checkin(self):
         today = str(date.today())
@@ -1941,6 +2282,25 @@ class PetController:
     def close_popup(self):
         self._popup.close_all()
 
+    def _show_egg_screen(self):
+        EggGachaScreen(self._root, on_complete=self._on_egg_hatched)
+
+    def _on_egg_hatched(self, char_id: str, pet_name: str):
+        if pet_name:
+            self._model.pet_name = pet_name
+        self._model.add_unlocked_char(char_id)
+        self._model.first_launch = False
+        self._model.sync_save()
+        info = GACHA_POOL.get(char_id, {})
+        self._view.refresh_info()
+        self._view.show_info(
+            "🥚 孵化成功！",
+            f"恭喜！「{pet_name}」孵出了\n"
+            f"【{info.get('rarity', '?')}】{info.get('name', char_id)}\n\n"
+            f"{info.get('desc', '')}\n\n"
+            f"已加入右鍵選單「切換角色」！"
+        )
+
     def show_menu(self, event):
         try:
             if not self._root.winfo_exists():
@@ -1965,7 +2325,7 @@ class PetController:
         ]
 
         # ── 切換角色子選單 ────────────────────────────────────
-        chars = _list_characters()
+        chars = _list_characters(unlocked_chars=self._model.unlocked_chars)
         cur_char = m.settings.get("character", "default")
         char_subitems = []
         for lbl, val in chars:
