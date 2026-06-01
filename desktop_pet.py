@@ -1110,14 +1110,14 @@ class SettingsView:
                    width=6, font=("Arial",10)
                    ).grid(row=row, column=1, sticky="w", padx=10); row+=1
 
-        tk.Label(g, text="☀️ 短休息（分）", font=("Arial",10), anchor="w"
+        tk.Label(g, text="😴 短休息（分）", font=("Arial",10), anchor="w"
                  ).grid(row=row, column=0, sticky="w", pady=4)
         self._rest = tk.IntVar(value=cfg["rest_min"])
         tk.Spinbox(g, from_=1, to=60, textvariable=self._rest,
                    width=6, font=("Arial",10)
                    ).grid(row=row, column=1, sticky="w", padx=10); row+=1
 
-        tk.Label(g, text="🌙 長休息（分）", font=("Arial",10), anchor="w"
+        tk.Label(g, text="🌙  長休息（分）", font=("Arial",10), anchor="w"
                  ).grid(row=row, column=0, sticky="w", pady=4)
         self._long_rest = tk.IntVar(value=cfg.get("long_rest_min", 15))
         tk.Spinbox(g, from_=5, to=60, textvariable=self._long_rest,
@@ -1762,7 +1762,7 @@ class PetController:
             except Exception: pass
             try: menu.unpost()
             except Exception: pass
-            self._root.after(50, self._quit)
+            self._root.after(50, self._confirm_quit)
 
         menu.add_command(label="  ❌  結束程式",
                           command=_exit_app)
@@ -1887,6 +1887,38 @@ class PetController:
         if self._status == "idle" and not self._pomo.running:
             self._view.show_speech(random.choice(DIALOGUES["idle"]))
         self._schedule_idle_chat()
+
+    def _confirm_quit(self):
+        win = tk.Toplevel(self._root)
+        win.resizable(False, False)
+        win.wm_attributes("-topmost", True)
+        win.grab_set()
+
+        hdr = tk.Frame(win, bg="#C0392B", pady=10)
+        hdr.pack(fill="x")
+        tk.Label(hdr, text="❌  結束程式", font=("Segoe UI", 12, "bold"),
+                 bg="#C0392B", fg="white", padx=14).pack(anchor="w")
+
+        tk.Label(win, text="確定要結束程式嗎？",
+                 font=("Segoe UI", 10), padx=24, pady=16).pack()
+
+        bf = tk.Frame(win); bf.pack(pady=(0, 14))
+
+        def _do_quit():
+            win.destroy()
+            self._quit()
+
+        tk.Button(bf, text="  確定結束  ", font=("Segoe UI", 10, "bold"),
+                  bg="#C0392B", fg="white", relief="flat", padx=8, pady=4,
+                  command=_do_quit).pack(side="left", padx=8)
+        tk.Button(bf, text="  取消  ", font=("Segoe UI", 10),
+                  relief="flat", padx=8, pady=4,
+                  command=win.destroy).pack(side="left", padx=8)
+
+        win.update_idletasks()
+        sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
+        ww, wh = win.winfo_width(), win.winfo_height()
+        win.geometry(f"+{(sw - ww) // 2}+{(sh - wh) // 2}")
 
     def _quit(self):
         try: self._root.grab_release()
