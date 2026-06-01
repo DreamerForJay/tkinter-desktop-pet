@@ -456,7 +456,11 @@ class PomodoroTimer:
     @property
     def sessions_n(self)   -> int:  return self._sessions_n
     @property
-    def auto_start(self)   -> bool: return self._auto_start
+    def auto_start(self)       -> bool: return self._auto_start
+    @property
+    def remaining_seconds(self) -> int:  return self._remain
+    @property
+    def work_seconds(self)      -> int:  return self._work_s
 
     def start(self):
         if not self._running:
@@ -664,7 +668,10 @@ class SpeechBubble:
         if self._after_id:
             try: self._parent.after_cancel(self._after_id)
             except Exception: pass
-        self._ensure_win()
+        try:
+            self._ensure_win()
+        except Exception:
+            return
         self._canvas.itemconfig(self._text_item, text=text)
         self._reposition()
         try:
@@ -693,6 +700,11 @@ class SpeechBubble:
             except Exception: pass
 
     def _ensure_win(self):
+        try:
+            if not self._parent.winfo_exists():
+                return
+        except Exception:
+            return
         if self._win and self._win.winfo_exists():
             return
         w, h, bh, r = self._W, self._H, self._BH, self._R
@@ -1152,7 +1164,7 @@ class SettingsView:
             sessions_before_long = max(2,  self._sessions_n.get()),
             auto_start           = self._auto_start.get(),
             topmost              = self._topmost.get(),
-            character            = "default",
+            character            = self._ctrl.model.settings.get("character", "default"),
         )
         self._win.destroy()
 
@@ -1203,7 +1215,7 @@ class PetView:
         self._bind_events()
         self._animate()
         self._hp_loop()
-        self._root.after(0, self._snap_to_bottom_right)
+        self._root.after(100, self._snap_to_bottom_right)
 
     # ── 視窗初始化 ────────────────────────────────────────────
 
@@ -1240,12 +1252,15 @@ class PetView:
 
     def _snap_to_bottom_right(self):
         self._root.update_idletasks()
-        sw = self._root.winfo_screenwidth()
-        sh = self._root.winfo_screenheight()
         pw = self._root.winfo_width()
         ph = self._root.winfo_height()
+        if pw <= 1 or ph <= 1:
+            self._root.after(150, self._snap_to_bottom_right)
+            return
+        sw = self._root.winfo_screenwidth()
+        sh = self._root.winfo_screenheight()
         x = max(0, sw - pw - 20)
-        y = max(0, sh - ph - 60)   # 60px 保留 Windows 工作列空間
+        y = max(0, sh - ph - 60)
         self._root.geometry(f"+{x}+{y}")
 
     # ── 公開介面（供 Controller 呼叫）─────────────────────────
@@ -1327,20 +1342,8 @@ class PetView:
                 return
         except tk.TclError:
             return
-        # 若有選單被 post，當動畫驅動時強制關閉它，避免選單殘留
-        if getattr(self, '_posted_menu', None):
-            try:
-                self._posted_menu.unpost()
-            except Exception:
-                pass
-            try:
-                self._posted_menu.grab_release()
-            except Exception:
-                pass
-            self._posted_menu = None
         frames = self._cache.get(self._status, self._character)
         if frames:
-            # 若切換為動畫幀，確保文字標籤隱藏
             self._txt_lbl.grid_remove()
             self._img_lbl.grid(row=1, column=0)
             frame = frames[self._frame_i % len(frames)]
@@ -1348,19 +1351,8 @@ class PetView:
             self._img_lbl.image = frame
             self._frame_i = (self._frame_i + 1) % len(frames)
         else:
-            # 切換到文字（圖片隱藏）時，一併關閉任何已打開的選單，避免殘留
             self._img_lbl.grid_remove()
             self._txt_lbl.grid(row=1, column=0)
-            if getattr(self, '_posted_menu', None):
-                try:
-                    self._posted_menu.unpost()
-                except Exception:
-                    pass
-                try:
-                    self._posted_menu.grab_release()
-                except Exception:
-                    pass
-                self._posted_menu = None
         self._anim_id = self._root.after(FRAME_MS, self._animate)
 
     def _hp_loop(self):
@@ -1382,17 +1374,6 @@ class PetView:
             self._dragging = True
             self._pre_drag = self._status
             self.set_status("drag")
-        # 開始拖曳時若有選單正在顯示，先關閉它，避免選單殘留
-        if getattr(self, '_posted_menu', None):
-            try:
-                self._posted_menu.unpost()
-            except Exception:
-                pass
-            try:
-                self._posted_menu.grab_release()
-            except Exception:
-                pass
-            self._posted_menu = None
 
     def _drag_move(self, event):
         self._root.geometry(f"+{event.x_root - self._ox}+{event.y_root - self._oy}")
@@ -1474,10 +1455,11 @@ class PetController:
         self._root   = root
         self._model  = model
         self._view   = view
-        self._music        = MusicPlayer()
-        self._status       = "idle"
-        self._checkin_id   = None
-        self._idle_chat_id = None
+        self._music           = MusicPlayer()
+        self._status          = "idle"
+        self._checkin_id      = None
+        self._idle_chat_id    = None
+        self._eat_restore_id  = None
 
         cfg = model.settings
         self._pomo = PomodoroTimer(
@@ -1628,8 +1610,16 @@ class PetController:
             food = FOOD_MAP[item_id]
             self._model.happiness += food["hp"]
             self._view.refresh_info()
-            self._view.trigger_eating(self._status)
+            prev_status = self._status
+            self._status = "eating"
+            self._view.trigger_eating(prev_status)
             self._view.show_speech(random.choice(DIALOGUES["eating"]), 3000)
+            if self._eat_restore_id:
+                self._root.after_cancel(self._eat_restore_id)
+            def _restore(s=prev_status):
+                if self._status == "eating":
+                    self._status = s
+            self._eat_restore_id = self._root.after(EATING_MS, _restore)
         elif item_id == "potion":
             self._model.happiness = 100
             self._view.refresh_info()
@@ -1789,18 +1779,8 @@ class PetController:
         menu.add_command(label="  ❌  結束程式",
                           command=_exit_app)
 
-        try:
-            # 記錄目前顯示的選單，讓 View 可在必要時主動關閉它
-            try: self._view._posted_menu = menu
-            except Exception: pass
-            menu.tk_popup(event.x_root, event.y_root)
-        finally:
-            try: menu.unpost()
-            except Exception: pass
-            try: menu.grab_release()
-            except Exception: pass
-            try: self._view._posted_menu = None
-            except Exception: pass
+        menu.bind("<Unmap>", lambda _: menu.grab_release())
+        menu.tk_popup(event.x_root, event.y_root)
 
     def _apply_preset(self, work: int, rest: int, long_rest: int, sessions: int):
         auto = self._model.settings.get("auto_start", False)
@@ -1893,8 +1873,8 @@ class PetController:
         self._checkin_id = None
         if not self._pomo.running or self._pomo.phase != "work":
             return
-        remain = self._pomo._remain
-        total  = self._pomo._work_s
+        remain = self._pomo.remaining_seconds
+        total  = self._pomo.work_seconds
         ratio  = remain / max(1, total)
         if ratio > 0.66:
             key = "work_early"
@@ -1925,6 +1905,9 @@ class PetController:
         self._pomo.pause()
         self._cancel_work_checkin()
         self._cancel_idle_chat()
+        if self._eat_restore_id:
+            self._root.after_cancel(self._eat_restore_id)
+            self._eat_restore_id = None
         self._model.sync_save()
         self._view.destroy()
 
