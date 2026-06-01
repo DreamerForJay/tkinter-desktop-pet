@@ -410,9 +410,35 @@ class MusicPlayer:
     FADE = 2.0   # 淡入 / 淡出秒數
 
     def __init__(self):
+        self._dir     = resource_path(os.path.join("assets", "music"))
         self._path    = resource_path(os.path.join("assets", "music", "study.mp3"))
         self._playing = False
         self._cancel  = threading.Event()
+        self._tracks: list[str] = []
+        self._index   = 0
+        self._scan_tracks()
+
+    def _scan_tracks(self):
+        exts = {".mp3", ".ogg", ".wav"}
+        if os.path.isdir(self._dir):
+            self._tracks = sorted(
+                os.path.join(self._dir, f)
+                for f in os.listdir(self._dir)
+                if os.path.splitext(f)[1].lower() in exts
+            )
+        if not self._tracks:
+            self._tracks = [self._path]
+
+    def next(self):
+        """切換到下一首音樂。"""
+        if not PYGAME_OK: return
+        self._scan_tracks()
+        self._index = (self._index + 1) % len(self._tracks)
+        self._path  = self._tracks[self._index]
+        was_playing = self._playing
+        if was_playing:
+            self._hard_stop()
+            self.play()
 
     def play(self):
         if not PYGAME_OK: return
@@ -867,6 +893,178 @@ class _ItemCard(tk.Frame):
     def update_count(self, count: int):
         if hasattr(self, "_cnt_lbl"):
             self._cnt_lbl.config(text=f"背包: {count}")
+
+
+# ── 自製右鍵彈出選單 ─────────────────────────────────────────
+
+class _PopupMenu:
+    """
+    自製右鍵彈出選單，以 Toplevel 實作。
+    完美解決點擊空白處自動關閉、子選單、滑鼠移開收合等問題。
+    """
+    _BG      = "#FFFFFF"
+    _HOV     = "#EAF0FC"
+    _SEP_CLR = "#E0E0E0"
+    _FG      = "#202124"
+    _FG_DIS  = "#AAAAAA"
+    _FONT    = ("Segoe UI", 10)
+
+    def __init__(self, root: tk.Tk, parent_menu=None):
+        self._root        = root
+        self._parent_menu = parent_menu
+        self._win         = None
+        self._sub_menu    = None
+        self._active_lbl  = None
+        self._hover_after_id = None
+
+    def popup(self, x: int, y: int, items: list):
+        self.close()
+        win = self._win = tk.Toplevel(self._root)
+        win.overrideredirect(True)
+        win.wm_attributes("-topmost", True)
+        win.config(bg=self._SEP_CLR)
+        win.focus_set()
+
+        body = tk.Frame(win, bg=self._BG, pady=4)
+        body.pack(padx=1, pady=1)
+
+        for item in items:
+            if item.get("sep"):
+                tk.Frame(body, height=1, bg=self._SEP_CLR).pack(
+                    fill="x", padx=8, pady=2)
+                continue
+
+            text      = item.get("label", "")
+            cmd       = item.get("cmd")
+            sub_items = item.get("items")
+            disabled  = item.get("disabled", False)
+            font      = item.get("font", self._FONT)
+            fg        = self._FG_DIS if disabled else self._FG
+
+            display_text = f"{text}    ➔" if sub_items else text
+
+            lbl = tk.Label(body, text=display_text, font=font, fg=fg, bg=self._BG,
+                           anchor="w", padx=16, pady=4,
+                           cursor="hand2" if (not disabled and (cmd or sub_items)) else "")
+            lbl.pack(fill="x")
+
+            if not disabled:
+                lbl.bind("<Enter>", lambda e, w=lbl, si=sub_items: self._on_item_enter(w, si))
+                lbl.bind("<Leave>", lambda e, w=lbl: self._on_item_leave(w))
+                if cmd:
+                    lbl.bind("<Button-1>", lambda e, c=cmd: self._invoke(c))
+
+        win.update_idletasks()
+        sw = self._root.winfo_screenwidth()
+        sh = self._root.winfo_screenheight()
+        ww = win.winfo_width()
+        wh = win.winfo_height()
+        px = min(x, sw - ww - 4)
+        py = min(y, sh - wh - 4)
+        win.geometry(f"+{max(0, px)}+{max(0, py)}")
+
+        if self._parent_menu is None:
+            self._root.bind_all("<ButtonPress>", self._on_global_click, add="+")
+            win.bind("<FocusOut>", self._on_focus_out)
+        else:
+            win.bind("<FocusOut>", self._on_focus_out)
+
+    def _on_item_enter(self, lbl, sub_items):
+        self._active_lbl = lbl
+        lbl.config(bg=self._HOV)
+        if self._hover_after_id:
+            self._root.after_cancel(self._hover_after_id)
+            self._hover_after_id = None
+        if not sub_items and self._sub_menu:
+            self._sub_menu.close()
+            self._sub_menu = None
+        if sub_items:
+            self._hover_after_id = self._root.after(
+                120, lambda: self._trigger_sub_menu(lbl, sub_items))
+
+    def _trigger_sub_menu(self, lbl, sub_items):
+        if self._sub_menu and self._sub_menu._win:
+            self._sub_menu.close()
+            self._sub_menu = None
+        self._sub_menu = _PopupMenu(self._root, parent_menu=self)
+        self._win.update_idletasks()
+        rx  = self._win.winfo_rootx()
+        rw  = self._win.winfo_width()
+        ly  = lbl.winfo_rooty()
+        sw  = self._root.winfo_screenwidth()
+        sub_w = 170
+        sub_x = rx + rw - 2 if rx + rw + sub_w < sw else rx - sub_w + 2
+        sub_y = ly - 4
+        self._sub_menu.popup(sub_x, sub_y, sub_items)
+
+    def _on_item_leave(self, lbl):
+        lbl.config(bg=self._BG)
+        if self._hover_after_id:
+            self._root.after_cancel(self._hover_after_id)
+            self._hover_after_id = None
+        self._root.after(100, self._check_cascade_leave)
+
+    def _check_cascade_leave(self):
+        mx = self._root.winfo_pointerx()
+        my = self._root.winfo_pointery()
+        if not self._is_mouse_in_menu_tree(mx, my):
+            if self._sub_menu:
+                self._sub_menu.close()
+                self._sub_menu = None
+
+    def _is_mouse_in_menu_tree(self, mx, my) -> bool:
+        if self._win and self._win.winfo_exists():
+            wx, wy = self._win.winfo_rootx(), self._win.winfo_rooty()
+            ww, wh = self._win.winfo_width(),  self._win.winfo_height()
+            if wx <= mx <= wx + ww and wy <= my <= wy + wh:
+                return True
+        if self._sub_menu:
+            return self._sub_menu._is_mouse_in_menu_tree(mx, my)
+        return False
+
+    def close(self):
+        if self._hover_after_id:
+            self._root.after_cancel(self._hover_after_id)
+            self._hover_after_id = None
+        if self._sub_menu:
+            self._sub_menu.close()
+            self._sub_menu = None
+        if self._win:
+            try: self._win.destroy()
+            except Exception: pass
+            self._win = None
+
+    def close_all(self):
+        try: self._root.unbind_all("<ButtonPress>")
+        except Exception: pass
+        if self._parent_menu:
+            self._parent_menu.close_all()
+        else:
+            self.close()
+
+    def _invoke(self, cmd):
+        self.close_all()
+        try:
+            self._root.after(10, cmd)
+        except Exception as e:
+            print(f"[Popup] {e}")
+
+    def _on_global_click(self, event):
+        mx, my = event.x_root, event.y_root
+        if not self._is_mouse_in_menu_tree(mx, my):
+            self.close_all()
+
+    def _on_focus_out(self, event):
+        self._root.after(100, self._check_focus_loss)
+
+    def _check_focus_loss(self):
+        mx = self._root.winfo_pointerx()
+        my = self._root.winfo_pointery()
+        top_menu = self
+        while top_menu._parent_menu:
+            top_menu = top_menu._parent_menu
+        if not top_menu._is_mouse_in_menu_tree(mx, my):
+            top_menu.close_all()
 
 
 # ── 商店視窗 ─────────────────────────────────────────────────
@@ -1385,16 +1583,8 @@ class PetView:
         for aid in (self._anim_id, self._eat_id, self._hp_id):
             if aid: self._root.after_cancel(aid)
         self._speech.cancel()
-        if getattr(self, '_posted_menu', None):
-            try:
-                self._posted_menu.unpost()
-            except Exception:
-                pass
-            try:
-                self._posted_menu.grab_release()
-            except Exception:
-                pass
-            self._posted_menu = None
+        if self._ctrl:
+            self._ctrl.close_popup()
         self._root.destroy()
 
     # ── 內部渲染 ──────────────────────────────────────────────
@@ -1527,6 +1717,7 @@ class PetController:
         self._model  = model
         self._view   = view
         self._music           = MusicPlayer()
+        self._popup           = _PopupMenu(root)
         self._status          = "idle"
         self._checkin_id      = None
         self._idle_chat_id    = None
@@ -1747,6 +1938,9 @@ class PetController:
 
     # ── 右鍵選單 ──────────────────────────────────────────────
 
+    def close_popup(self):
+        self._popup.close_all()
+
     def show_menu(self, event):
         try:
             if not self._root.winfo_exists():
@@ -1756,117 +1950,98 @@ class PetController:
 
         m   = self._model
         inv = m.inventory
-        FNT    = ("Segoe UI", 10)
-        FNT_SM = ("Segoe UI",  9)
-        FNT_BD = ("Segoe UI", 10, "bold")
-
-        menu = tk.Menu(self._root, tearoff=0, font=FNT)
-
-        def _cmd(f):
-            """點選後先關閉選單再執行指令。"""
-            def _w():
-                try: menu.unpost()
-                except Exception: pass
-                f()
-            return _w
-
-        # ── 寵物資訊（唯讀）────────────────────────────────────
-        menu.add_command(label=f"  🎭  {m.pet_name}",
-                         state="disabled", font=FNT_BD)
-        hp     = m.happiness
+        hp  = m.happiness
         hp_bar = "♥" * (hp // 25) + "♡" * (4 - hp // 25)
         warn   = "  ⚠ 心情過低！" if hp < 30 else ""
         bonus  = "  ⚡ 加倍符文" if m.bonus_mult > 1 else ""
-        menu.add_command(
-            label=f"     {hp_bar} {hp}%{warn}   💰 {m.coins} 枚{bonus}",
-            state="disabled", font=FNT_SM)
-        menu.add_separator()
+        bag_n  = sum(v for v in inv.values() if v > 0)
 
-        # ── 活動 ─────────────────────────────────────────────
-        menu.add_command(label="  😴  發呆",   command=_cmd(self.do_idle))
-        menu.add_command(label="  💻  寫程式", command=_cmd(self.do_coding))
-        menu.add_command(label="  📚  讀書",   command=_cmd(self.do_studying))
-        menu.add_command(label="  💤  睡覺",   command=_cmd(self.do_sleep))
-        menu.add_separator()
+        # ── 活動子選單 ────────────────────────────────────────
+        state_subitems = [
+            {"label": "  😴  發呆",   "cmd": self.do_idle},
+            {"label": "  💻  寫程式", "cmd": self.do_coding},
+            {"label": "  📚  讀書",   "cmd": self.do_studying},
+            {"label": "  💤  睡覺",   "cmd": self.do_sleep},
+        ]
 
-        # ── 切換角色 ─────────────────────────────────────────
+        # ── 切換角色子選單 ────────────────────────────────────
         chars = _list_characters()
-        if len(chars) > 1:
-            cur_char = m.settings.get("character", "default")
-            char_menu = tk.Menu(menu, tearoff=0, font=FNT)
-            for lbl, val in chars:
-                indicator = "  ✓  " if val == cur_char else "      "
-                char_menu.add_command(
-                    label=f"{indicator}{lbl}",
-                    command=_cmd(lambda v=val: self.switch_character(v)),
-                )
-            menu.add_cascade(label="  🎨  切換角色", menu=char_menu)
-            menu.add_separator()
+        cur_char = m.settings.get("character", "default")
+        char_subitems = []
+        for lbl, val in chars:
+            indicator = "✓  " if val == cur_char else "    "
+            char_subitems.append({
+                "label": f"  {indicator}{lbl}",
+                "cmd": lambda v=val: self.switch_character(v),
+            })
 
-        # ── 商店 & 背包 ───────────────────────────────────────
-        bag_n     = sum(v for v in inv.values() if v > 0)
-        bag_label = f"  🎒  背包（{bag_n} 件）" if bag_n else "  🎒  背包（空）"
-        menu.add_command(label="  🏪  商店",   command=_cmd(self._view.open_shop))
-        menu.add_command(label=bag_label,       command=_cmd(self._view.open_backpack))
-        menu.add_separator()
+        # ── 快速餵食子選單 ────────────────────────────────────
+        foods = [(iid, cnt) for iid, cnt in inv.items() if iid in FOOD_IDS and cnt > 0]
+        food_subitems = []
+        for iid, cnt in foods:
+            food = FOOD_MAP[iid]
+            food_subitems.append({
+                "label": f"  {food['icon']} {food['name']} ×{cnt}（{food['desc']}）",
+                "cmd": lambda i=iid: self.use_item(i),
+            })
+        if not food_subitems:
+            food_subitems.append({"label": "  背包目前沒有食物", "disabled": True})
 
-        # ── 音樂 ─────────────────────────────────────────────
-        music = tk.Menu(menu, tearoff=0, font=FNT)
-        music.add_command(label="  🎶  神隱少女",
-                          command=_cmd(self._music.play))
-        music.add_separator()
-        music.add_command(label="  📴  關閉音樂",
-                          command=_cmd(self._music.stop))
-        menu.add_cascade(label="  🎵  切換音樂", menu=music)
-
-        # ── 番茄鐘子選單 ──────────────────────────────────────
+        # ── 番茄鐘子選單 ─────────────────────────────────────
         phase = self._pomo.phase
         sd, sn = self._pomo.session_done, self._pomo.sessions_n
-        status = {"work":      f"工作中  第 {sd+1}/{sn} 節",
-                  "rest":      f"休息中（{sd}/{sn} 節完成）",
-                  "long_rest": "大休息中"}.get(phase, "")
+        pomo_status = {
+            "work":      f"▸ 工作中  第 {sd+1}/{sn} 節",
+            "rest":      f"▸ 休息中（{sd}/{sn} 節完成）",
+            "long_rest": "▸ 大休息中",
+        }.get(phase, "")
+        pomo_subitems = [
+            {"label": pomo_status, "disabled": True, "font": ("Segoe UI", 9)},
+            {"label": "  ⏸️  暫停" if self._pomo.running else "  ▶️  開始",
+             "cmd": self.toggle_pomo},
+            {"label": "  🔁  重設全部", "cmd": self.reset_pomo},
+            {"sep": True},
+            {"label": "  🍅  經典   25 / 5 / 15 分",
+             "cmd": lambda: self._apply_preset(25, 5, 15, 4)},
+            {"label": "  💪  雙倍   50 / 10 / 30 分",
+             "cmd": lambda: self._apply_preset(50, 10, 30, 4)},
+            {"label": "  ⚡  迷你   15 / 3 / 10 分",
+             "cmd": lambda: self._apply_preset(15, 3, 10, 4)},
+            {"label": "  ⚙️  自訂時間…", "cmd": self._show_custom_dialog},
+        ]
 
-        pomo = tk.Menu(menu, tearoff=0, font=FNT)
-        pomo.add_command(label=f"     {status}",
-                         state="disabled", font=FNT_SM)
-        pomo.add_separator()
-        pomo.add_command(
-            label="  ⏸️  暫停" if self._pomo.running else "  ▶️  開始",
-            command=_cmd(self.toggle_pomo))
-        pomo.add_command(label="  🔁  重設全部", command=_cmd(self.reset_pomo))
-        
-        pomo.add_separator()
+        # ── 音樂子選單 ────────────────────────────────────────
+        music_subitems = [
+            {"label": "  ▶️  播放",     "cmd": self._music.play},
+            {"label": "  ⏹️  關閉",     "cmd": self._music.stop},
+            {"label": "  🔀  切換音樂", "cmd": self._music.next},
+        ]
 
-        pre = tk.Menu(pomo, tearoff=0, font=FNT)
-        pre.add_command(label="  🍅  經典   25 / 5 / 15 分",
-                        command=_cmd(lambda: self._apply_preset(25, 5, 15, 4)))
-        pre.add_command(label="  💪  雙倍   50 / 10 / 30 分",
-                        command=_cmd(lambda: self._apply_preset(50, 10, 30, 4)))
-        pre.add_command(label="  ⚡  迷你   15 / 3 / 10 分",
-                        command=_cmd(lambda: self._apply_preset(15, 3, 10, 4)))
-        pre.add_separator()
-        pre.add_command(label="  ⚙  自訂時間…", command=_cmd(self._show_custom_dialog))
-        pomo.add_cascade(label="  ⏱  快速預設", menu=pre)
+        # ── 主選單 ────────────────────────────────────────────
+        items = [
+            {"label": f"  🎭  {m.pet_name}",
+             "disabled": True, "font": ("Segoe UI", 10, "bold")},
+            {"label": f"     {hp_bar} {hp}%{warn}   💰 {m.coins} 枚{bonus}",
+             "disabled": True, "font": ("Segoe UI", 9)},
+            {"sep": True},
+            {"label": "  🎭  角色狀態",  "items": state_subitems},
+            {"label": "  🎨  切換角色",  "items": char_subitems},
+            {"sep": True},
+            {"label": "  🍅  番茄鐘",    "items": pomo_subitems},
+            {"label": "  🍎  快速餵食",  "items": food_subitems},
+            {"sep": True},
+            {"label": "  🏪  商店",      "cmd": self._view.open_shop},
+            {"label": f"  🎒  背包（{bag_n} 件）" if bag_n else "  🎒  背包（空）",
+             "cmd": self._view.open_backpack},
+            {"label": "  🎵  背景音樂",  "items": music_subitems},
+            {"sep": True},
+            {"label": "  📊  統計數據",  "cmd": self._view.open_stats},
+            {"label": "  ⚙️  設定",      "cmd": self._view.open_settings},
+            {"sep": True},
+            {"label": "  ❌  結束程式",  "cmd": self._confirm_quit},
+        ]
 
-        menu.add_cascade(label="  🍅  番茄鐘",  menu=pomo)
-        menu.add_separator()
-
-        # ── 底部 ──────────────────────────────────────────────
-        menu.add_command(label="  📊  統計",     command=_cmd(self._view.open_stats))
-        menu.add_command(label="  ⚙️  設定",     command=_cmd(self._view.open_settings))
-        menu.add_separator()
-        def _exit_app():
-            try: menu.grab_release()
-            except Exception: pass
-            try: menu.unpost()
-            except Exception: pass
-            self._root.after(50, self._confirm_quit)
-
-        menu.add_command(label="  ❌  結束程式",
-                          command=_exit_app)
-
-        menu.bind("<Unmap>", lambda _: menu.grab_release())
-        menu.tk_popup(event.x_root, event.y_root)
+        self._popup.popup(event.x_root, event.y_root, items)
 
     def _apply_preset(self, work: int, rest: int, long_rest: int, sessions: int):
         auto = self._model.settings.get("auto_start", False)
