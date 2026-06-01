@@ -60,15 +60,11 @@ PetController     控制層：事件 → Model → View
 
 ## 已知待修問題
 
-詳細紀錄在 `PROJECT_NOTES.md`，GitHub Issues 也有追蹤（#1–#5）。
+詳細紀錄在 `PROJECT_NOTES.md`，GitHub Issues 追蹤：[DreamerForJay/tkinter-desktop-pet/issues](https://github.com/DreamerForJay/tkinter-desktop-pet/issues)
 
 | 問題 | 位置 | 狀態 |
 |------|------|------|
-| 右鍵選單 `finally: menu.unpost()` 立即關閉選單 | `show_menu()` ~1798 | 未修 |
-| 吃東西 Controller `_status` 不同步，心情仍衰減 | `on_hp_tick()` ~1555 | 未修 |
-| `SettingsView._apply()` 硬寫 `character="default"` | `_apply()` ~1146 | 未修 |
-| `_do_work_checkin` 讀私有屬性 `_pomo._remain` | `~1896` | 未修 |
-| `SpeechBubble` 在 root 銷毀後被 after 喚醒 | `_ensure_win()` ~695 | 未修 |
+| 休息中套用快速預設後音樂/動畫不同步 | `update_config()` ~408 | Issue #5 開著 |
 
 ## 對話系統常數
 
@@ -85,3 +81,17 @@ _IDLE_CHAT_MS        = 180_000  # 發呆狀態每 3 分鐘閒聊
 - 分支命名：`fix/<issue號>-<簡短說明>`、`feat/<issue號>-<功能名>`
 - commit 格式：`fix/feat/chore/refactor/perf/docs: 說明`，修 bug 加 `fixes #N`
 - PR 合併目標：`master`
+
+## 文件維護規則
+
+每次修改程式後，依照以下規則同步更新文件：
+
+| 修改類型 | 需更新的位置 |
+|---------|-------------|
+| 新增功能 | `PROJECT_NOTES.md` 的「專案現況」功能清單 |
+| 修正 Bug | `PROJECT_NOTES.md` 的「已修正問題」加一條記錄（原因＋修法） |
+| 新增/刪除類別或主要方法 | `PROJECT_NOTES.md` 的 Mermaid classDiagram |
+| 新增/修改啟動流程 | `PROJECT_NOTES.md` 的啟動流程 flowchart |
+| 開新 Issue | `gh issue create` 登記到 GitHub |
+| 關閉 Issue | `gh issue close N --comment "修法說明"` |
+| 更新 CLAUDE.md 的「已知待修問題」表格 | 問題修好後從表格移除 |

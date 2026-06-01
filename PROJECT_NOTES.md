@@ -262,3 +262,170 @@ assets/
 ```
 
 後續可以根據這份 PDF 與本 Markdown 紀錄，整理成新的報告架構或簡報內容。
+
+---
+
+## 架構圖（Mermaid）
+
+> 架構有異動時請同步更新此節。
+
+### 1. MVC 類別架構
+
+```mermaid
+classDiagram
+    class PetController {
+        +model: PetModel
+        +toggle_pomo()
+        +buy_item()
+        +use_item()
+        +show_menu()
+        +daily_checkin()
+        +apply_settings()
+        -_confirm_quit()
+        -_quit()
+        -_do_work_checkin()
+        -_do_idle_chat()
+    }
+    class PetModel {
+        +coins: int
+        +happiness: int
+        +inventory: dict
+        +settings: dict
+        +add_inv()
+        +remove_inv()
+        +inc_stat()
+        +patch_settings()
+        +sync_save()
+        -_dirty()
+    }
+    class _AutoSaver {
+        +schedule(payload)
+        -_run()
+    }
+    class PetView {
+        +set_status()
+        +show_speech()
+        +trigger_eating()
+        +refresh_info()
+        +update_timer()
+        -_animate()
+        -_hp_loop()
+        -_snap_to_bottom_right()
+    }
+    class SpeechBubble {
+        +show(text, duration_ms)
+        +reposition()
+        +cancel()
+        -_ensure_win()
+    }
+    class TimerBubble {
+        +update()
+        +set_visible()
+    }
+    class AnimationCache {
+        +get(state, character)
+    }
+    class PomodoroTimer {
+        +phase: str
+        +running: bool
+        +remaining_seconds: int
+        +work_seconds: int
+        +start()
+        +pause()
+        +reset()
+        +update_config()
+        -_tick()
+        -_advance()
+    }
+    class MusicPlayer {
+        +play()
+        +stop()
+        -_fade()
+    }
+    class ShopView
+    class BackpackView
+    class StatsView
+    class SettingsView
+
+    PetController --> PetModel : 讀寫資料
+    PetController --> PetView : 更新 UI
+    PetController --> PomodoroTimer : 控制計時
+    PetController --> MusicPlayer : 控制音樂
+    PetModel --> _AutoSaver : 非同步存檔
+    PetView --> SpeechBubble : 顯示對話
+    PetView --> TimerBubble : 顯示倒數
+    PetView --> AnimationCache : 取得動畫幀
+    PetView --> ShopView : 開啟子視窗
+    PetView --> BackpackView : 開啟子視窗
+    PetView --> StatsView : 開啟子視窗
+    PetView --> SettingsView : 開啟子視窗
+```
+
+---
+
+### 2. 使用食物完整流程
+
+```mermaid
+sequenceDiagram
+    actor U as 使用者
+    participant BV as BackpackView
+    participant C as PetController
+    participant M as PetModel
+    participant AS as _AutoSaver
+    participant V as PetView
+
+    U->>BV: 點擊「使用」按鈕
+    BV->>C: use_item(item_id)
+    C->>M: remove_inv(item_id)
+    M->>AS: schedule(json)
+    C->>M: happiness += food["hp"]
+    M->>AS: schedule(json)
+    C->>C: _status = "eating"
+    C->>V: trigger_eating(prev_status)
+    C->>V: show_speech("好好吃！")
+    V->>U: 播放吃東西動畫（3 秒）
+    V->>U: 顯示對話氣泡
+    Note over C,V: EATING_MS (3s) 後
+    C->>C: _status = prev_status
+    V->>U: 恢復原動畫
+```
+
+---
+
+### 3. 番茄鐘狀態機
+
+```mermaid
+stateDiagram-v2
+    [*] --> 工作中
+
+    工作中 --> 短休息 : work_end\n(session < sessions_n)
+    工作中 --> 大休息 : work_end\n(session >= sessions_n\n重置 session=0)
+    短休息 --> 工作中 : short_rest_end
+    大休息 --> 工作中 : long_rest_end
+
+    工作中 --> 暫停 : pause()
+    暫停 --> 工作中 : start()
+    短休息 --> 暫停 : pause()
+    暫停 --> 短休息 : start()
+    大休息 --> 暫停 : pause()
+    暫停 --> 大休息 : start()
+
+    工作中 --> [*] : reset()
+```
+
+---
+
+### 4. 程式啟動流程
+
+```mermaid
+flowchart TD
+    A([啟動 desktop_pet.py]) --> B[PetModel.__init__\n載入 data.json\n建立 _AutoSaver]
+    B --> C[PetView.__init__\n建立主視窗\n初始化 SpeechBubble / TimerBubble]
+    C --> D[PetController.__init__\n建立 PomodoroTimer\n建立 MusicPlayer]
+    D --> E[view.set_controller\n建立子視窗\n綁定滑鼠事件]
+    E --> F[_animate loop\n每 200ms 更新動畫]
+    E --> G[_hp_loop\n每 90s 心情 -1]
+    E --> H[after 100ms\n_snap_to_bottom_right]
+    E --> I[_schedule_idle_chat\n3 分鐘後閒聊]
+    F & G & H & I --> J([root.mainloop])
+```
