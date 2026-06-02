@@ -2860,8 +2860,10 @@ class TodoView:
                      fg=dfg, bg=bg).pack(side="left", padx=4)
             try:
                 if _dt2.fromisoformat(due_str) < now:
-                    tk.Label(row, text=" 逾期 ", font=("Arial", 7, "bold"),
-                             bg="#E53935", fg="white").pack(side="left", padx=2)
+                    badge = tk.Frame(row, bg="#FF5722", padx=5, pady=1)
+                    badge.pack(side="left", padx=4)
+                    tk.Label(badge, text="⚠ 逾期", font=("Arial", 9, "bold"),
+                             bg="#FF5722", fg="white").pack()
             except Exception:
                 pass
 
@@ -3318,14 +3320,6 @@ class SettingsView:
                  showvalue=True).pack(side="left")
         row += 1
 
-        tk.Label(g, text="🎨 主題", font=("Arial",10), anchor="w"
-                 ).grid(row=row, column=0, sticky="w", pady=4)
-        self._theme_var = tk.StringVar(value=cfg.get("theme", "light"))
-        tf2 = tk.Frame(g); tf2.grid(row=row, column=1, sticky="w", padx=10); row += 1
-        for val, lbl in [("light","淺色"), ("dark","深色")]:
-            tk.Radiobutton(tf2, text=lbl, variable=self._theme_var, value=val,
-                           font=("Arial",9)).pack(side="left", padx=4)
-
         ttk.Separator(g).grid(row=row, column=0, columnspan=2,
                               sticky="ew", pady=6); row += 1
 
@@ -3391,7 +3385,7 @@ class SettingsView:
             topmost              = self._topmost.get(),
             character            = character,
             pet_scale            = round(self._scale_var.get(), 1),
-            theme                = self._theme_var.get(),
+            theme                = "light",
         )
         self._win.destroy()
 
