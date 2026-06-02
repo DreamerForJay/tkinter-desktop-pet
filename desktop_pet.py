@@ -3355,11 +3355,14 @@ class SettingsView:
         src = filedialog.askopenfilename(
             parent=self._win, filetypes=[("JSON 存檔","*.json")])
         if src and tk.messagebox.askyesno(
-                "確認匯入", "匯入後將覆蓋目前存檔，繼續？\n（程式需重新啟動）",
+                "確認匯入", "匯入後將覆蓋目前存檔，確定要匯入嗎？",
                 parent=self._win):
             try:
                 shutil.copy2(src, data_file_path())
-                tk.messagebox.showinfo("匯入完成", "存檔已匯入，請重新啟動程式。",
+                # 立即把匯入的資料載入記憶體，避免結束程式時 sync_save 用舊資料覆蓋
+                self._ctrl.model._load()
+                self._ctrl.model._dirty()
+                tk.messagebox.showinfo("匯入完成", "存檔已匯入！",
                                        parent=self._win)
             except Exception as e:
                 tk.messagebox.showerror("失敗", str(e), parent=self._win)
