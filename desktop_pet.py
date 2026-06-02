@@ -2195,10 +2195,32 @@ def _todo_group(t: dict, today) -> int:
 
 
 def _play_reminder_chime():
-    """播放三音上行提示音（C5-E5-G5），背景執行緒，不阻塞主迴圈。"""
+    """待辦提醒音：三音上行 C5-E5-G5，背景執行緒。"""
     def _run():
         try:
             for freq, dur in [(523, 120), (659, 120), (784, 250)]:
+                winsound.Beep(freq, dur)
+        except Exception:
+            pass
+    threading.Thread(target=_run, daemon=True).start()
+
+
+def _play_work_done_chime():
+    """番茄鐘工作段結束音：四音上行 C5-E5-G5-C6，歡慶感。"""
+    def _run():
+        try:
+            for freq, dur in [(523, 100), (659, 100), (784, 100), (1047, 300)]:
+                winsound.Beep(freq, dur)
+        except Exception:
+            pass
+    threading.Thread(target=_run, daemon=True).start()
+
+
+def _play_rest_end_chime():
+    """休息結束提示音：三音下行 G5-E5-C5，柔和提示。"""
+    def _run():
+        try:
+            for freq, dur in [(784, 150), (659, 150), (523, 300)]:
                 winsound.Beep(freq, dur)
         except Exception:
             pass
@@ -3230,6 +3252,7 @@ class PetController:
                                 visible=self._pomo.running)
 
     def _on_work_end(self):
+        _play_work_done_chime()
         self._cancel_work_checkin()
         mult   = self._model.bonus_mult
         reward = 10 * mult
@@ -3285,6 +3308,7 @@ class PetController:
             random.choice(DIALOGUES[key]), 5000))
 
     def _on_short_rest_end(self):
+        _play_rest_end_chime()
         _show_dialog(self._root, "☀️ 休息結束！",
                      "確認後開始下一節工作！💪", "#1E8449")
         self._set_status_for_work()
@@ -3292,6 +3316,7 @@ class PetController:
             self._root.after(300, self._start_work_session_feedback)
 
     def _on_long_rest_end(self):
+        _play_rest_end_chime()
         _show_dialog(self._root, "🎉 大休息結束！",
                      "一個完整週期完成！\n確認後開始新一輪，加油！💪", "#1A5276")
         self._set_status_for_work()
