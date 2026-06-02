@@ -2169,39 +2169,72 @@ class BackpackView:
 # ── 統計視窗 ─────────────────────────────────────────────────
 
 class StatsView:
+    """統計數據視窗（含週報 Tab）。"""
+
+    BAR_W = 26; BAR_GAP = 5; CHART_H = 160; PAD_L = 38; PAD_B = 36
+
     def __init__(self, master, ctrl):
-        self._master = master
-        self._ctrl   = ctrl
-        self._win    = None
-        self._frame  = None
+        self._master  = master
+        self._ctrl    = ctrl
+        self._win     = None
+        self._frame   = None
+        self._chart_cvs = None
+        self._sum_lbl   = None
 
     def open(self):
         if self._win and self._win.winfo_exists():
-            self._win.lift(); self._refresh(); return
+            self._win.lift(); self._refresh(); self._redraw_chart(); return
         self._build()
 
     def _build(self):
         w = self._win = tk.Toplevel(self._master)
-        w.title("📊 統計數據"); w.resizable(False, False)
-        hdr = tk.Frame(w, bg="#E0F2F1", pady=10); hdr.pack(fill="x")
-        tk.Label(hdr, text="📊 統計數據", font=("Arial", 14, "bold"),
-                 bg="#E0F2F1", fg="#004D40").pack()
-        ttk.Separator(w).pack(fill="x", padx=12, pady=6)
-        self._frame = tk.Frame(w, padx=24, pady=4); self._frame.pack()
-        self._refresh()
-        ttk.Separator(w).pack(fill="x", padx=12, pady=6)
+        w.title("📊 統計 & 週報"); w.resizable(True, False)
+
+        hdr = tk.Frame(w, bg="#004D40", pady=8); hdr.pack(fill="x")
+        tk.Label(hdr, text="📊 統計 & 學習週報", font=("Arial", 13, "bold"),
+                 bg="#004D40", fg="white").pack(side="left", padx=14)
+
+        nb = ttk.Notebook(w)
+        nb.pack(fill="both", expand=True, padx=8, pady=6)
+
+        # ── Tab 1：統計數據 ──────────────────────────────────
+        tab1 = tk.Frame(nb, padx=20, pady=8)
+        nb.add(tab1, text="  統計數據  ")
+        self._frame = tk.Frame(tab1); self._frame.pack()
+
+        # 森林區
+        self._forest_lbl = tk.Label(tab1, text="", font=("Arial", 11),
+                                     fg="#2E7D32", pady=4)
+        self._forest_lbl.pack()
+
+        # ── Tab 2：學習週報 ──────────────────────────────────
+        tab2 = tk.Frame(nb, padx=8, pady=8)
+        nb.add(tab2, text="  學習週報  ")
+
+        n  = 14
+        cw = self.PAD_L + n * (self.BAR_W + self.BAR_GAP) + 20
+        self._chart_cvs = tk.Canvas(tab2, width=cw,
+                                     height=self.CHART_H + self.PAD_B + 30,
+                                     bg="white", highlightthickness=0)
+        self._chart_cvs.pack()
+        self._sum_lbl = tk.Label(tab2, text="", font=("Arial", 10), fg="#555", anchor="w")
+        self._sum_lbl.pack(fill="x", padx=6)
+
+        nb.bind("<<NotebookTabChanged>>", lambda e: self._redraw_chart())
+
+        ttk.Separator(w).pack(fill="x", padx=8)
         tk.Button(w, text="關閉", width=10, relief="flat",
                   bg="#78909C", fg="white", font=("Arial", 10),
                   command=w.destroy).pack(pady=8)
 
+        self._refresh()
+        self._redraw_chart()
+
+    # ── Tab 1：統計數據 ──────────────────────────────────────
+
     def _refresh(self):
         if not self._frame: return
         for c in self._frame.winfo_children(): c.destroy()
-        # 同時清除之前可能殘留的森林 Label
-        win = self._frame.master
-        for c in win.winfo_children():
-            if getattr(c, "_forest_label", False):
-                c.destroy()
         m  = self._ctrl.model
         s  = m.stats
         hp = m.happiness
@@ -2224,12 +2257,11 @@ class StatsView:
         ]
         for i, (icon, lbl, val, vc) in enumerate(rows):
             tk.Label(self._frame, text=icon, font=("Arial", 13),
-                     anchor="w").grid(row=i, column=0, pady=3, padx=(12, 4), sticky="w")
+                     anchor="w").grid(row=i, column=0, pady=3, padx=(8, 4), sticky="w")
             tk.Label(self._frame, text=lbl, font=("Arial", 10),
                      fg="#555", anchor="w", width=12).grid(row=i, column=1, sticky="w")
             tk.Label(self._frame, text=val, font=("Arial", 10, "bold"),
                      fg=vc, anchor="w").grid(row=i, column=2, sticky="w", padx=(4, 12))
-        # 森林視覺
         total = s.get("pomodoro_done", 0)
         level = min(total // 10, 3)
         tree  = ["🌱", "🌿", "🌳", "🌲"][level]
@@ -2237,13 +2269,68 @@ class StatsView:
         suffix = f"  ×{total}" if total > 10 else ""
         forest_text = (f"🌳 我的森林：{trees}{suffix}"
                        if total > 0 else "🌱 完成番茄鐘，開始種下第一棵樹！")
-        sep = ttk.Separator(win)
-        sep._forest_label = True
-        sep.pack(fill="x", padx=12, pady=(6, 2))
-        lbl_f = tk.Label(win, text=forest_text, font=("Arial", 11),
-                         fg="#2E7D32", pady=6)
-        lbl_f._forest_label = True
-        lbl_f.pack()
+        if self._forest_lbl:
+            self._forest_lbl.config(text=forest_text)
+
+    # ── Tab 2：學習週報 ──────────────────────────────────────
+
+    def _redraw_chart(self):
+        from datetime import date, timedelta
+        if not self._chart_cvs: return
+        c = self._chart_cvs; c.delete("all")
+        today   = date.today()
+        history = {h["date"]: (h["pomodoros"], h.get("minutes", 0))
+                   for h in self._ctrl.model.stats.get("daily_history", [])}
+        n    = 14
+        days = [(today - timedelta(days=n-1-i)) for i in range(n)]
+        vals = [history.get(d.isoformat(), (0, 0))[0] for d in days]
+        max_v = max(vals) if any(vals) else 1
+        ch, pl, pb = self.CHART_H, self.PAD_L, self.PAD_B
+        bw, bg_ = self.BAR_W, self.BAR_GAP
+        total_w = pl + n * (bw + bg_) + 20
+
+        for step in [1, 2, 5, 10]:
+            if max_v / step <= 6: grid_step = step; break
+        else: grid_step = max(1, max_v // 5)
+
+        grid_val = grid_step
+        while grid_val <= max_v:
+            y = ch - int(grid_val / max_v * ch) + 10
+            c.create_line(pl-4, y, total_w-10, y, fill="#EEE", dash=(3,3))
+            c.create_text(pl-7, y, text=str(grid_val), font=("Arial",7), anchor="e", fill="#888")
+            grid_val += grid_step
+
+        c.create_line(pl, 10, pl, ch+10, fill="#CCC")
+        c.create_line(pl, ch+10, total_w-10, ch+10, fill="#CCC")
+
+        today_str = today.isoformat()
+        for i, (d, v) in enumerate(zip(days, vals)):
+            x0 = pl + i * (bw + bg_) + bg_
+            x1 = x0 + bw
+            bar_h = max(2, int(v / max_v * ch)) if v > 0 else 0
+            y1 = ch + 10; y0 = y1 - bar_h
+            is_today = d.isoformat() == today_str
+            col = "#00796B" if is_today else "#80CBC4"
+            if bar_h > 0:
+                c.create_rectangle(x0, y0, x1, y1, fill=col, outline="")
+            if v > 0:
+                c.create_text((x0+x1)//2, y0-4, text=str(v),
+                               font=("Arial",7,"bold"), fill="#333")
+            lbl = d.strftime("%m/%d") if i % 2 == 0 else ""
+            c.create_text((x0+x1)//2, y1+12, text=lbl,
+                           font=("Arial",7),
+                           fill="#00796B" if is_today else "#888")
+
+        week_days_set = {d.isoformat() for d in days[7:]}
+        week_sum = sum(vals[7:])
+        week_avg = week_sum / 7
+        week_min = sum(history.get(d, (0, 0))[1] for d in week_days_set)
+        time_str = f"{week_min//60}h {week_min%60}m" if week_min >= 60 else f"{week_min}m"
+        best_idx = vals.index(max(vals)) if max(vals) > 0 else -1
+        best_str = f"  最高：{days[best_idx].strftime('%m/%d')} ({vals[best_idx]} 顆)" if best_idx >= 0 else ""
+        if self._sum_lbl:
+            self._sum_lbl.config(
+                text=f"本週番茄：{week_sum} 顆　專注：{time_str}　平均：{week_avg:.1f} 顆/天{best_str}")
 
 
 # ── 待辦清單 ──────────────────────────────────────────────────
@@ -2765,17 +2852,29 @@ class TodoView:
         tk.Label(row, text=t["text"], font=txt_font, fg=txt_fg,
                  bg=bg, anchor="w", width=18).pack(side="left", padx=6)
 
-        # 相對日期
+        # 相對日期 + 逾期 badge
         if due_str and not is_done:
+            from datetime import datetime as _dt2
             disp, dfg = _fmt_due(due_str, now)
             tk.Label(row, text=disp, font=("Arial", 10),
                      fg=dfg, bg=bg).pack(side="left", padx=4)
+            try:
+                if _dt2.fromisoformat(due_str) < now:
+                    tk.Label(row, text=" 逾期 ", font=("Arial", 7, "bold"),
+                             bg="#E53935", fg="white").pack(side="left", padx=2)
+            except Exception:
+                pass
 
         # 分類標籤
         cat = t.get("category", "")
         if cat and not is_done:
             tk.Label(row, text=f"{_CAT_ICONS.get(cat,'📌')} {cat}",
                      font=("Arial", 9), fg="#AAA", bg=bg).pack(side="left", padx=3)
+
+        # 重複排程 icon
+        if t.get("repeat") and not is_done:
+            tk.Label(row, text="🔁", font=("Arial", 8), fg="#90CAF9",
+                     bg=bg).pack(side="left")
 
         # 備註提示
         note = t.get("note", "")
@@ -3095,13 +3194,18 @@ class WeeklyReportView:
             c.create_text((x0+x1)//2, y1+12, text=lbl,
                            font=("Arial",7), fill="#888" if not is_today else "#1565C0")
 
-        # 摘要
+        # 摘要（含小時）
+        week_days_set = {d.isoformat() for d in days[7:]}
         week_sum  = sum(vals[7:])
         week_avg  = week_sum / 7
+        week_min  = sum(h.get("minutes", 0) for h in
+                        self._ctrl.model.stats.get("daily_history", [])
+                        if h["date"] in week_days_set)
+        time_str  = f"{week_min//60}h {week_min%60}m" if week_min >= 60 else f"{week_min}m"
         best_idx  = vals.index(max(vals)) if max(vals) > 0 else -1
-        best_str  = f"最高：{days[best_idx].strftime('%m/%d')} ({vals[best_idx]} 顆)" if best_idx >= 0 else ""
+        best_str  = f"  最高：{days[best_idx].strftime('%m/%d')} ({vals[best_idx]} 顆)" if best_idx >= 0 else ""
         self._sum_lbl.config(
-            text=f"本週番茄：{week_sum} 顆　平均：{week_avg:.1f} 顆/天　{best_str}")
+            text=f"本週番茄：{week_sum} 顆　專注：{time_str}　平均：{week_avg:.1f} 顆/天{best_str}")
 
 
 # ── 設定視窗 ─────────────────────────────────────────────────
@@ -3621,6 +3725,7 @@ class PetController:
         # 套用主題
         global _current_theme
         _current_theme = self._model.settings.get("theme", "light")
+        self._apply_theme_to_root()
         self._schedule_idle_chat()
         self._schedule_todo_remind()
         self._schedule_todo_check()
@@ -3875,6 +3980,7 @@ class PetController:
             theme=theme,
         )
         _current_theme = theme
+        self._apply_theme_to_root()          # 立即套用主題
         if abs(pet_scale - old_scale) > 0.05:
             self._view._cache.invalidate()   # 清快取使新 scale 生效
         self._pomo.update_config(work_min, rest_min, long_rest_min,
@@ -3972,9 +4078,8 @@ class PetController:
     # ── 點擊互動 ─────────────────────────────────────────────────
 
     def on_pet_click(self):
-        self._view.trigger_alert_briefly()
         msgs = ["嗯…？", "幹嘛啦 QQ", "別戳我 >_<", "有事嗎？", "我在這裡！",
-                "專心讀書！", "要不要喝水？", "記得休息哦～"]
+                "專心讀書！", "要不要喝水？", "記得休息哦～", "給我一顆番茄 🍅"]
         self._view.show_speech(random.choice(msgs), 3000)
 
     # ── 成就 / 每日歷史 ──────────────────────────────────────────
@@ -4127,8 +4232,7 @@ class PetController:
             {"label": "  🎵  背景音樂",  "items": music_subitems},
             {"sep": True},
             {"label": "  📋  待辦清單",  "cmd": self._view.open_todos},
-            {"label": "  📊  統計數據",  "cmd": self._view.open_stats},
-            {"label": "  📈  學習週報",  "cmd": self._view.open_weekly_report},
+            {"label": "  📊  統計 & 週報","cmd": self._view.open_stats},
             {"label": "  📜  成就",       "cmd": self._view.open_achievements},
             {"label": "  ⚙️  設定",      "cmd": self._view.open_settings},
             {"sep": True},
@@ -4240,6 +4344,51 @@ class PetController:
         self._view.show_speech(random.choice(DIALOGUES[key]))
         self._schedule_work_checkin(_CHECKIN_INTERVAL_MS)
 
+    # ── 主題 ────────────────────────────────────────────────────
+
+    def _apply_theme_to_root(self):
+        """套用深色/淺色主題至全域 tkinter palette 與 ttk Style。"""
+        c = THEMES.get(_current_theme, THEMES["light"])
+        try:
+            self._root.tk_setPalette(
+                background=c["bg"],
+                foreground=c["fg"],
+                activeBackground=c["hdr_bg"],
+                activeForeground=c["hdr_fg"],
+                highlightBackground=c["bg"],
+                selectBackground=c["hdr_bg"],
+                selectForeground=c["hdr_fg"],
+                insertBackground=c["fg"],
+            )
+            style = ttk.Style(self._root)
+            try:
+                style.theme_use("clam")
+            except Exception:
+                pass
+            for s, cfg in [
+                (".",              {"background": c["bg"],        "foreground": c["fg"]}),
+                ("TFrame",         {"background": c["bg"]}),
+                ("TLabel",         {"background": c["bg"],        "foreground": c["fg"]}),
+                ("TSeparator",     {"background": c["sep"]}),
+                ("TEntry",         {"fieldbackground": c["entry_bg"], "foreground": c["entry_fg"]}),
+                ("TCombobox",      {"fieldbackground": c["entry_bg"], "foreground": c["entry_fg"]}),
+                ("TSpinbox",       {"fieldbackground": c["entry_bg"], "foreground": c["entry_fg"]}),
+                ("TCheckbutton",   {"background": c["bg"],        "foreground": c["fg"]}),
+                ("TRadiobutton",   {"background": c["bg"],        "foreground": c["fg"]}),
+                ("TNotebook",      {"background": c["bg"]}),
+                ("TNotebook.Tab",  {"background": c["sub_bg"],    "foreground": c["fg"]}),
+                ("TScrollbar",     {"background": c["sub_bg"],    "troughcolor": c["bg"]}),
+            ]:
+                style.configure(s, **cfg)
+            style.map("TNotebook.Tab",
+                      background=[("selected", c["hdr_bg"])],
+                      foreground=[("selected", c["hdr_fg"])])
+            style.map("TCombobox",
+                      fieldbackground=[("readonly", c["entry_bg"])],
+                      selectbackground=[("readonly", c["hdr_bg"])])
+        except Exception as e:
+            print(f"[Theme] 主題套用失敗：{e}")
+
     # ── 全域快捷鍵 ──────────────────────────────────────────────
 
     def _setup_hotkeys(self):
@@ -4255,7 +4404,15 @@ class PetController:
             keyboard.add_hotkey(
                 cfg.get("open_shop", "ctrl+alt+s"),
                 lambda: self._root.after(0, self._view.open_shop))
+            self._hotkeys_active = True
+            print("[Hotkey] 快捷鍵已啟用：Ctrl+Alt+P/T/S")
+        except PermissionError:
+            self._hotkeys_active = False
+            print("[Hotkey] 需要管理員權限才能啟用全域快捷鍵")
+            self._root.after(2000, lambda: self._view.show_speech(
+                "⌨️ 全域快捷鍵需要以管理員身份執行才能使用", 6000))
         except Exception as e:
+            self._hotkeys_active = False
             print(f"[Hotkey] 快捷鍵設定失敗：{e}")
 
     def _toggle_pomodoro_hotkey(self):
