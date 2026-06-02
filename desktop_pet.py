@@ -264,11 +264,6 @@ DEFAULT_DATA: dict = {
         "todo_remind_before_min": 5,
         "pet_scale": 1.0,
         "theme": "light",
-        "hotkeys": {
-            "start_pause": "ctrl+alt+p",
-            "open_todo":   "ctrl+alt+t",
-            "open_shop":   "ctrl+alt+s",
-        },
     },
     "todos": [],
     "achievements": [],
@@ -3723,7 +3718,6 @@ class PetController:
         self._schedule_idle_chat()
         self._schedule_todo_remind()
         self._schedule_todo_check()
-        self._setup_hotkeys()
         if self._model.first_launch:
             self._model.first_launch = False
             self._root.after(800, lambda: self._view.show_speech(
@@ -4385,37 +4379,6 @@ class PetController:
             print(f"[Theme] 主題套用失敗：{e}")
 
     # ── 全域快捷鍵 ──────────────────────────────────────────────
-
-    def _setup_hotkeys(self):
-        try:
-            import keyboard
-            cfg = self._model.settings.get("hotkeys", {})
-            keyboard.add_hotkey(
-                cfg.get("start_pause", "ctrl+alt+p"),
-                lambda: self._root.after(0, self._toggle_pomodoro_hotkey))
-            keyboard.add_hotkey(
-                cfg.get("open_todo", "ctrl+alt+t"),
-                lambda: self._root.after(0, self._view.open_todos))
-            keyboard.add_hotkey(
-                cfg.get("open_shop", "ctrl+alt+s"),
-                lambda: self._root.after(0, self._view.open_shop))
-            self._hotkeys_active = True
-            print("[Hotkey] 快捷鍵已啟用：Ctrl+Alt+P/T/S")
-        except PermissionError:
-            self._hotkeys_active = False
-            print("[Hotkey] 需要管理員權限才能啟用全域快捷鍵")
-            self._root.after(2000, lambda: self._view.show_speech(
-                "⌨️ 全域快捷鍵需要以管理員身份執行才能使用", 6000))
-        except Exception as e:
-            self._hotkeys_active = False
-            print(f"[Hotkey] 快捷鍵設定失敗：{e}")
-
-    def _toggle_pomodoro_hotkey(self):
-        if self._pomo.running:
-            self._pomo.pause()
-            self._view.show_speech("⏸ 番茄鐘已暫停", 2000)
-        else:
-            self._start_work_session_feedback()
 
     def _schedule_idle_chat(self):
         self._cancel_idle_chat()

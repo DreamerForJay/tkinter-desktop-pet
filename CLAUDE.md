@@ -9,7 +9,7 @@
 .venv\Scripts\python.exe desktop_pet.py
 
 # 安裝依賴
-.venv\Scripts\pip.exe install pillow pygame keyboard plyer pyinstaller
+.venv\Scripts\pip.exe install pillow pygame plyer pyinstaller
 
 # 語法檢查
 .venv\Scripts\python.exe -m py_compile desktop_pet.py
@@ -70,7 +70,6 @@ Layer 4 — Controller
                       → _todo_idle_id（5 分鐘今日待辦輪播）
                       → _todo_check_id（每分鐘到期掃描）
                       → _todo_today_idx（今日輪播指針）
-                      → _setup_hotkeys()（keyboard library 全域快捷鍵）
                       → _check_achievements()（成就掃描）
                       → _update_daily_history()（每日歷史記錄）
                       → _apply_theme_to_root()（tk_setPalette + ttk Style）
@@ -90,8 +89,6 @@ FREE_CHARS          = {"default", "小紫"}
 GACHA_POOL          # 貓咪/兔兔/企鵝/狐狸/小龍（含稀有度/蛋色/描述）
 GACHA_WEIGHTS       # 機率：35/30/18/12/5
 ACHIEVEMENTS        # 12 個成就定義（id/name/desc/icon）
-THEMES              # light/dark 色盤（dark 保留但已停用切換）
-_current_theme      # 目前主題（全域，固定 "light"）
 
 _CHECKIN_FIRST_MS    = 120_000   # 工作後 2 分鐘第一次提醒
 _CHECKIN_INTERVAL_MS = 300_000   # 之後每 5 分鐘
