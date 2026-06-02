@@ -1,44 +1,77 @@
-# Desktop Pet
+# 桌面小寵物 Desktop Pet
 
-視窗程式設計期末專題　|　彰化師範大學 資訊工程學系
+> 視窗程式設計期末專題　|　彰化師範大學 資訊工程學系
 
-[![Python](https://img.shields.io/badge/Python-3.10+-blue)](https://python.org)
-[![Tkinter](https://img.shields.io/badge/GUI-Tkinter-green)](https://docs.python.org/3/library/tkinter.html)
-[![License](https://img.shields.io/badge/License-MIT-lightgrey)](LICENSE)
+一隻常駐桌面角落的虛擬寵物。結合**番茄鐘工作法**、**多角色 Gacha 系統**、**Todoist 風格待辦清單**與**心情養成機制**，讓讀書和寫程式多一份陪伴與動力。
 
-常駐桌面的虛擬寵物，結合番茄鐘工作法、多角色養成與 Todoist 風格待辦清單，以 MVC 架構實作於單一 Python 檔案（約 3,800 行）。
-
----
-
-## 目錄
-
-- [安裝](#安裝)
-- [功能](#功能)
-- [操作](#操作)
-- [架構](#架構)
-- [存檔格式](#存檔格式)
-- [素材規格](#素材規格)
-- [打包 exe](#打包-exe)
+![Python](https://img.shields.io/badge/Python-3.10%2B-blue?logo=python)
+![Tkinter](https://img.shields.io/badge/GUI-Tkinter-green)
+![License](https://img.shields.io/badge/License-MIT-lightgrey)
 
 ---
 
-## 安裝
+## 功能特色
 
-**必要**：Python 3.10+（`tkinter` 內建）
+| 功能 | 說明 |
+|------|------|
+| 多角色系統 | 預設角色免費使用；Gacha 角色於商店購蛋解鎖，孵蛋動畫含真實 sprite 揭曉 |
+| 放生動畫 | 日落場景，角色 sprite 漸遠離去，打字機台詞，可隨時略過 |
+| 匯入自訂角色 | 右鍵選單直接匯入含 `idle/` 子目錄的任意資料夾 |
+| 番茄鐘計時器 | 工作 / 短休息 / 大休息三階段，彩色 HUD 進度條，完成後播放提示音並自動獎勵金幣 |
+| 角色對話氣泡 | 工作中定時關心、心情警示、吃東西反應、發呆閒聊 |
+| 待辦清單 | Todoist 風格分組顯示、優先度色條、相對日期、個別到期提醒音效 |
+| 音樂管理 | 視窗化曲目管理，支援選播、刪除、匯入（MP3 / OGG / WAV），淡入淡出切換 |
+| 統計（Forest 風格） | 累積專注時間、今日番茄、連續天數、emoji 森林成長視覺化 |
+| 金幣系統 | 番茄鐘 +10（可加倍）、每日簽到 +5；商店購買食物與道具 |
+| 心情養成 | 每 90 秒衰減 −1，低於 60% / 30% 觸發對話提醒 |
+| 個人化設定 | 寵物名稱、番茄鐘時長、每輪節數、自動開始、永遠置頂 |
+| 自動存檔 | 每次狀態變動立即以背景執行緒寫入 `data.json`，重啟後完整保留 |
+| 結束確認 | 點選結束程式後跳出確認視窗，防止誤觸 |
+
+---
+
+## 安裝與執行
+
+### 必要環境
+
+- Python 3.10+
+- `tkinter`（Python 標準安裝內建）
+
+### 選用依賴
 
 ```bash
 pip install pillow pygame
+```
+
+| 套件 | 用途 | 未安裝時的行為 |
+|------|------|----------------|
+| Pillow | 載入角色 PNG 動畫序列 | 顯示文字備用角色 `(ovo)`，其餘功能正常 |
+| pygame | 背景音樂播放（淡入淡出） | 靜音執行，其餘功能正常 |
+
+### 執行
+
+```bash
 python desktop_pet.py
 ```
 
-| 套件 | 用途 | 未安裝時 |
-|------|------|----------|
-| Pillow | 載入角色 PNG 動畫 | 以文字 `(ovo)` 取代，其餘正常 |
-| pygame | 背景音樂播放 | 靜音執行，其餘正常 |
-
 ---
 
-## 功能
+## 操作說明
+
+| 操作 | 功能 |
+|------|------|
+| 左鍵拖曳 | 將寵物移動至螢幕任意位置 |
+| 右鍵單擊 | 開啟主選單 |
+
+主選單包含：角色狀態切換、角色切換（含放生 / 匯入）、番茄鐘控制、快速餵食、商店、背包、音樂管理、待辦清單、統計、設定、結束程式。
+
+### 番茄鐘快速預設
+
+| 預設 | 工作 | 短休息 | 大休息 |
+|------|------|--------|--------|
+| 經典 | 25 分 | 5 分 | 15 分 |
+| 雙倍 | 50 分 | 10 分 | 30 分 |
+| 迷你 | 15 分 | 3 分 | 10 分 |
 
 ### 角色系統
 
@@ -51,7 +84,7 @@ python desktop_pet.py
 | 帥潮教授 | `assets/帥潮教授/` |
 | 小紫 | `assets/小紫/` |
 
-**Gacha 角色**（商店購蛋解鎖）
+**Gacha 角色**（商店購買角色蛋 30 金幣解鎖）
 
 | 角色 | 稀有度 | 機率 |
 |------|--------|------|
@@ -61,29 +94,11 @@ python desktop_pet.py
 | 狡黠狐狸 | 稀有 | 12% |
 | 神秘小龍 | 傳說 |  5% |
 
-- **孵蛋互動**：購買角色蛋後點擊 7 次，蛋殼龜裂動畫 → 粒子爆炸 → 揭曉真實角色動畫
-- **放生**：Gacha 角色可放生（日落場景動畫，角色漸遠離去），完成後從解鎖清單移除
-- **自訂匯入**：右鍵 → 切換角色 → 匯入角色素材，選取含 `idle/` 子目錄的資料夾即可加入
+### 商店道具
 
-### 番茄鐘
+**食物**（補充心情值）
 
-- 工作 → 短休息 → 大休息三階段循環，寵物頭頂 HUD 顯示倒計時與彩色進度條
-- 完成提示音：工作結束四音上行（C5-E5-G5-C6），休息結束三音下行（G5-E5-C5）
-- 每完成一顆番茄 +10 金幣；加倍符文效果期間可達 ×2
-
-| 快速預設 | 工作 | 短休息 | 大休息 |
-|---------|------|--------|--------|
-| 經典 | 25 分 | 5 分 | 15 分 |
-| 雙倍 | 50 分 | 10 分 | 30 分 |
-| 迷你 | 15 分 | 3 分 | 10 分 |
-
-### 商店與心情
-
-心情值每 90 秒自然衰減 −1，低於 60% / 30% 時角色主動提醒。購買食物後存入背包，使用即補充心情。
-
-**食物**
-
-| 品項 | 費用 | 心情 |
+| 道具 | 費用 | 心情 |
 |------|------|------|
 | 蘋果 | 2 | +15 |
 | 珍珠奶茶 | 3 | +20 |
@@ -94,7 +109,7 @@ python desktop_pet.py
 
 **道具**
 
-| 品項 | 費用 | 效果 |
+| 道具 | 費用 | 效果 |
 |------|------|------|
 | 快樂藥水 | 10 | 心情立即 100% |
 | 神秘禮盒 | 12 | 隨機獲得 5〜30 金幣 |
@@ -102,84 +117,101 @@ python desktop_pet.py
 | 蝴蝶結 | 20 | 裝飾品 |
 | 角色蛋 | 30 | 孵化隨機 Gacha 角色 |
 
-**金幣來源**：番茄鐘完成 +10、每日簽到 +5、神秘禮盒 5〜30 隨機。
+---
 
-### 待辦清單
+## 專案結構
 
-- **分組顯示**：依到期日自動歸類（逾期 / 今天 / 明天 / 本週 / 之後 / 無截止日期）
-- **優先度**：高（紅）/ 中（橙）/ 低（綠）以左側色條視覺化
-- **相對日期**：「逾期 3 天」「今天 22:00」「明天 07:00」等格式
-- **個別提醒**：每筆任務可設定到期前 N 分鐘提示音，程式每分鐘掃描一次到期狀態
-- **快速新增**：視窗底部輸入列，Enter 直接建立任務
-- **今日輪播**：每 5 分鐘在對話氣泡中依序提醒今日與逾期任務
-- **篩選**：全部 / 未完成 / 今天 / 已完成，視窗可自由縮放
+```
+Dpet/
+├── desktop_pet.py          # 主程式（單檔 MVC，~3,800 行）
+├── data.json               # 自動產生的存檔（.gitignore 排除）
+└── assets/
+    ├── characters.json     # 角色顯示名稱對應表
+    ├── icon.ico
+    ├── 帥潮教授/            # default 角色素材
+    │   ├── idle/           # 待機動畫 PNG 序列（必要）
+    │   ├── coding/
+    │   ├── studying/
+    │   ├── eating/
+    │   ├── drag/
+    │   ├── alert/
+    │   └── sleep/
+    ├── 小紫/                # 第二預設角色（同上結構）
+    ├── 貓咪/ 兔兔/ 企鵝/ 狐狸/ 小龍/   # Gacha 角色（需解鎖）
+    └── music/
+        └── *.mp3           # 背景音樂（.gitignore 排除）
+```
 
-### 音樂管理
-
-右鍵 → 音樂管理：顯示完整曲目列表，支援選播、刪除（同步移除磁碟檔案）、匯入（MP3 / OGG / WAV）。切換時 2 秒淡入淡出。
-
-### 統計
-
-| 指標 | 說明 |
-|------|------|
-| 累積專注 | 所有番茄鐘工作時間總和，格式化為 X 小時 Y 分 |
-| 今日番茄 | 當日完成計數，跨日自動重置 |
-| 連續天數 | 每日至少完成一顆番茄即計入，中斷歸零 |
-| 我的森林 | 番茄數轉換為成長樹木：🌱 → 🌿 → 🌳 → 🌲 |
-
-### 對話系統
-
-工作開始後 2 分鐘第一次關心，之後每 5 分鐘一次；發呆狀態每 3 分鐘閒聊；吃東西、心情低落均有對應台詞。
+> 動畫資料夾內的 PNG 以自然數排序（`slice_1.png`、`slice_2.png`…）載入並循環播放；缺少的動畫狀態自動 fallback 至 `idle/`。
 
 ---
 
-## 操作
+## 架構說明（MVC）
 
-| 操作 | 效果 |
-|------|------|
-| 左鍵拖曳 | 移動寵物至螢幕任意位置 |
-| 右鍵單擊 | 開啟主選單 |
+```mermaid
+flowchart TD
+    subgraph Controller
+        C[PetController\n事件協調 / 業務邏輯\n番茄獎勵 / 對話排程 / 角色切換]
+    end
+    subgraph Model
+        M[PetModel\n金幣 / 心情 / 背包 / 設定\n待辦 / 角色解鎖 / 統計]
+        AS[_AutoSaver\ndaemon 執行緒\n非同步寫 JSON]
+        M --> AS
+    end
+    subgraph Services
+        PT[PomodoroTimer\nroot.after 狀態機]
+        MP[MusicPlayer\npygame 淡入淡出]
+        AC[AnimationCache\nPNG 序列快取\n多角色路徑解析]
+    end
+    subgraph View
+        PV[PetView\n主視窗 / 動畫驅動]
+        SB[SpeechBubble]
+        TB[TimerBubble]
+        PM[_PopupMenu]
+        EG[EggGachaScreen]
+        FS[FarewellScreen]
+        TV[TodoView]
+        MV[MusicView]
+        SW[ShopView / BackpackView\nStatsView / SettingsView]
+        PV --> SB & TB & PM & EG & FS & TV & MV & SW
+    end
 
-主選單包含：角色狀態切換、角色切換（含放生 / 匯入）、番茄鐘控制、快速餵食、商店、背包、音樂管理、待辦清單、統計、設定、結束程式。
-
----
-
-## 架構
-
-整個專案實作於單一 `desktop_pet.py`，依 MVC 模式分為四層：
-
-```
-Model       PetModel          金幣、心情、背包、設定、待辦、角色解鎖、統計
-            _AutoSaver        daemon 執行緒非同步寫入 JSON
-
-Services    PomodoroTimer     root.after(1000) 驅動的狀態機
-            MusicPlayer       pygame 背景執行緒，淡入淡出 + 曲庫掃描
-            AnimationCache    PNG 序列快取，多角色路徑解析，缺失狀態 fallback idle
-
-View        PetView           主視窗（overrideredirect + 透明色鍵）
-            TimerBubble       頭頂倒計時 HUD
-            SpeechBubble      浮動對話氣泡
-            _PopupMenu        Toplevel 手刻右鍵選單
-            EggGachaScreen    孵蛋互動動畫
-            FarewellScreen    放生告別動畫
-            ShopView          商店
-            BackpackView      背包
-            StatsView         統計
-            TodoView          待辦清單
-            TodoEditDialog    待辦新增 / 編輯
-            MusicView         音樂管理
-            SettingsView      設定
-
-Controller  PetController     協調所有事件、排程與狀態更新
+    C -->|讀寫資料| M
+    C -->|更新 UI| PV
+    C -->|控制| PT & MP
+    PV -->|取幀| AC
 ```
 
-**資料流**：View 觸發事件 → Controller 呼叫 Model → Model `_dirty()` 非同步存檔 → Controller 更新 View。
+整個專案以單一檔案 `desktop_pet.py` 實作，分為四個明確分層：
+
+| 層級 | 類別 | 職責 |
+|------|------|------|
+| **Model** | `PetModel`、`_AutoSaver` | 純資料層，不含任何 tkinter。`_AutoSaver` 以 daemon 執行緒非同步寫入 JSON，退出前 `sync_save()` 同步補寫。 |
+| **Services** | `AnimationCache`、`MusicPlayer`、`PomodoroTimer` | 業務邏輯，不依賴 tkinter。支援多角色路徑解析、pygame 淡入淡出、`root.after()` 驅動的計時器。 |
+| **View** | `PetView` 及所有子視窗 | 純渲染層，不含業務邏輯。透過 `set_controller()` 連結後才啟動事件綁定。 |
+| **Controller** | `PetController` | 接收 View 事件 → 操作 Model → 驅動 View 更新。管理對話排程、今日待辦輪播、到期提醒掃描。 |
+
+### 主要元件說明
+
+- **`TimerBubble`** — Canvas 繪製圓角計時 HUD，顯示在寵物頭頂；含進度條與階段文字，三色區分工作（紅）/ 短休息（綠）/ 大休息（藍）。
+
+- **`SpeechBubble`** — 獨立 `Toplevel` 浮動視窗，Canvas 繪製圓角氣泡 + 向下三角尾巴；拖曳寵物時跟隨移動，N 秒後自動隱藏。
+
+- **`_PopupMenu`** — 以 `Toplevel` + `Frame` 手刻右鍵選單，解決 `tk.Menu.tk_popup()` 在 Windows 非阻塞導致立即消失的問題；支援子選單 Hover 觸發與全域點擊關閉。
+
+- **`EggGachaScreen`** — 7 次點擊觸發龜裂動畫（`_cracks` 列表）→ 粒子爆炸（`_particles`）→ 揭曉時以 PIL 預載並縮放角色真實 idle sprite 動畫。
+
+- **`FarewellScreen`** — Canvas 日落天空場景，預載 10 個縮放尺寸的角色 sprite，根據位移進度選取對應尺寸實現漸縮效果；打字機台詞，可略過。
+
+- **`PomodoroTimer`** — 支援工作→短休息→（第 N 節）→大休息的完整週期；`update_config()` 可在執行中熱更新所有參數而不中斷現有計時。
+
+- **`AnimationCache`** — `character == "default"` 時優先讀取 `assets/帥潮教授/{state}/`，PNG 以 `_nat_key()` 自然排序（避免 `slice_10 < slice_2` 的字母順序錯誤），缺失狀態 fallback idle。
 
 ---
 
 ## 存檔格式
 
-執行時自動建立 `data.json`（與 `desktop_pet.py` 同層目錄）：
+存檔路徑：執行檔或 `.py` 的同層目錄下的 `data.json`。
 
 ```json
 {
@@ -215,7 +247,7 @@ Controller  PetController     協調所有事件、排程與狀態更新
 }
 ```
 
-版本升級時以 `_deep_merge()` 載入：既有欄位更新自存檔，動態欄位（`inventory`、`todos`）完整保留，未知欄位自動丟棄，確保向前相容。
+載入時使用 `_deep_merge()`：已定義欄位從存檔更新，動態欄位（`inventory`、`todos`）完整保留，未知舊欄位自動捨棄，確保版本向前相容。
 
 ---
 
@@ -240,7 +272,7 @@ assets/角色名稱/
 
 ---
 
-## 打包 exe
+## 打包為 exe（PyInstaller）
 
 ```powershell
 pip install pyinstaller
@@ -249,7 +281,7 @@ pyinstaller --onefile --windowed --name DesktopPet `
     desktop_pet.py
 ```
 
-輸出 `dist/DesktopPet.exe`，執行時需將 `assets/` 資料夾置於 exe 同層目錄。`data.json` 亦寫入同層目錄（非 PyInstaller 的臨時 `_MEIPASS` 目錄）。
+執行檔輸出至 `dist/DesktopPet.exe`，需將 `assets/` 資料夾放在 exe 同層目錄。`data.json` 也會儲存於 exe 同層目錄（非 PyInstaller 的臨時目錄 `_MEIPASS`）。
 
 ---
 
@@ -260,6 +292,6 @@ pyinstaller --onefile --windowed --name DesktopPet `
 
 ---
 
-## License
+## 授權
 
-[MIT](LICENSE)
+本專案以 [MIT License](LICENSE) 釋出，歡迎自由使用與修改。
