@@ -264,7 +264,6 @@ DEFAULT_DATA: dict = {
         "todo_remind_before_min": 5,
         "pet_scale": 1.0,
         "theme": "light",
-        "line_notify_token": "",
         "hotkeys": {
             "start_pause": "ctrl+alt+p",
             "open_todo":   "ctrl+alt+t",
@@ -2429,25 +2428,6 @@ def _system_notify(title: str, msg: str):
     threading.Thread(target=_run, daemon=True).start()
 
 
-def _send_line_notify(token: str, message: str):
-    """透過 LINE Notify API 推播訊息到手機，不阻塞主執行緒。
-    Token 申請：https://notify-bot.line.me/zh_TW/
-    """
-    if not token:
-        return
-    def _run():
-        try:
-            import urllib.request, urllib.parse
-            data = urllib.parse.urlencode({"message": message}).encode("utf-8")
-            req  = urllib.request.Request(
-                "https://notify-api.line.me/api/notify", data=data)
-            req.add_header("Authorization", f"Bearer {token}")
-            urllib.request.urlopen(req, timeout=8)
-        except Exception as e:
-            print(f"[LINE Notify] 推播失敗：{e}")
-    threading.Thread(target=_run, daemon=True).start()
-
-
 class TodoEditDialog:
     """新增/編輯單一待辦事項的對話框。"""
 
@@ -3343,24 +3323,6 @@ class SettingsView:
         ttk.Separator(g).grid(row=row, column=0, columnspan=2,
                               sticky="ew", pady=6); row += 1
 
-        # ── LINE Notify ────────────────────────────────────────
-        tk.Label(g, text="📱 LINE Notify", font=("Arial",10), anchor="w"
-                 ).grid(row=row, column=0, sticky="w", pady=4)
-        self._line_token = tk.StringVar(
-            value=self._ctrl.model.settings.get("line_notify_token", ""))
-        lf = tk.Frame(g); lf.grid(row=row, column=1, sticky="ew", padx=4); row += 1
-        tk.Entry(lf, textvariable=self._line_token, width=22,
-                 font=("Arial", 9), show="*").pack(side="left", fill="x", expand=True)
-        tk.Button(lf, text="測試", font=("Arial", 8), relief="flat",
-                  bg="#06C755", fg="white",
-                  command=self._test_line_notify).pack(side="left", padx=4)
-        tk.Label(g, text="申請 Token → notify-bot.line.me", font=("Arial", 8),
-                 fg="#888", anchor="w").grid(row=row, column=0, columnspan=2,
-                 sticky="w", padx=(4, 0), pady=(0, 6)); row += 1
-
-        ttk.Separator(g).grid(row=row, column=0, columnspan=2,
-                              sticky="ew", pady=4); row += 1
-
         # ── 存檔管理 ───────────────────────────────────────────
         tk.Label(g, text="💾 存檔管理", font=("Arial",10), anchor="w"
                  ).grid(row=row, column=0, sticky="w", pady=4)
@@ -3379,29 +3341,6 @@ class SettingsView:
                   command=self._apply).pack(side="left", padx=6)
         tk.Button(bf, text="✖ 取消", font=("Arial",10), width=8,
                   relief="flat", command=w.destroy).pack(side="left", padx=6)
-
-    def _test_line_notify(self):
-        token = self._line_token.get().strip()
-        if not token:
-            tk.messagebox.showwarning("提示", "請先輸入 LINE Notify Token",
-                                       parent=self._win); return
-        def _run():
-            try:
-                import urllib.request, urllib.parse
-                data = urllib.parse.urlencode(
-                    {"message": "\n🐾 Desktop Pet 測試通知\n連線成功！待辦到期時會自動推播 📋"}
-                ).encode("utf-8")
-                req = urllib.request.Request(
-                    "https://notify-api.line.me/api/notify", data=data)
-                req.add_header("Authorization", f"Bearer {token}")
-                res = urllib.request.urlopen(req, timeout=8)
-                if res.status == 200:
-                    self._win.after(0, lambda: tk.messagebox.showinfo(
-                        "成功", "測試通知已發送！請查看 LINE", parent=self._win))
-            except Exception as e:
-                self._win.after(0, lambda: tk.messagebox.showerror(
-                    "失敗", f"Token 錯誤或無網路：\n{e}", parent=self._win))
-        threading.Thread(target=_run, daemon=True).start()
 
     def _export_save(self):
         from tkinter import filedialog
@@ -3447,7 +3386,6 @@ class SettingsView:
             character            = character,
             pet_scale            = round(self._scale_var.get(), 1),
             theme                = "light",
-            line_notify_token    = self._line_token.get().strip(),
         )
         self._win.destroy()
 
@@ -3809,8 +3747,6 @@ class PetController:
         pomo_n = self._model.stats.get("pomodoro_done", 0) + 1
         _system_notify("Desktop Pet — 番茄鐘完成！",
                        f"休息一下吧 ☕  完成 {pomo_n} 顆番茄")
-        token = self._model.settings.get("line_notify_token", "")
-        _send_line_notify(token, f"\n🍅 番茄鐘完成！\n已累積 {pomo_n} 顆番茄，休息一下吧 ☕")
         self._cancel_work_checkin()
         mult   = self._model.bonus_mult
         reward = 10 * mult
@@ -4564,10 +4500,6 @@ class PetController:
                     _play_reminder_chime()
                     _system_notify("Desktop Pet — 待辦提醒", f"{t['text']}  {time_desc}")
                     self._view.show_speech(msg, 7000)
-                    # LINE Notify 推播到手機
-                    token = self._model.settings.get("line_notify_token", "")
-                    _send_line_notify(token,
-                        f"\n📋 待辦提醒\n任務：{t['text']}\n{time_desc}")
             except Exception:
                 pass
         self._schedule_todo_check()
