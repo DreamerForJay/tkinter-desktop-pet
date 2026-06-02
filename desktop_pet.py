@@ -26,8 +26,8 @@
 """
 
 # ── 標準庫 ────────────────────────────────────────────────────
-import sys, os, json, threading, queue, random, time, re, math
-from datetime import date
+import sys, os, json, threading, queue, random, time, re, math, shutil, uuid, winsound
+from datetime import date, timedelta
 
 
 def _nat_key(s: str) -> list:
@@ -86,6 +86,8 @@ HP_DECAY_MS = 90_000     # 每 90 秒心情 -1
 _CHECKIN_FIRST_MS    = 120_000   # 工作開始後 2 分鐘第一次關心
 _CHECKIN_INTERVAL_MS = 300_000   # 之後每 5 分鐘關心一次
 _IDLE_CHAT_MS        = 180_000   # 發呆狀態每 3 分鐘閒聊
+_TODO_REMIND_MS      = 300_000   # 每 5 分鐘隨機提醒一項待辦
+_TODO_CHECK_MS       =  60_000   # 每 1 分鐘檢查到期提醒
 
 DIALOGUES: dict = {
     "work_start": [
@@ -157,18 +159,18 @@ DIALOGUES: dict = {
 FREE_CHARS = {"default", "小紫"}
 
 GACHA_POOL = {
-    "cat":     {"name":"橘橘貓咪", "rarity":"普通", "rarity_color":"78909C",
-                "egg_color":"FF8C42", "desc":"一隻調皮的橘貓，愛撒嬌！"},
-    "bunny":   {"name":"雪白兔兔", "rarity":"普通", "rarity_color":"78909C",
-                "egg_color":"F4C2C2", "desc":"圓滾滾的雪白兔子！"},
-    "penguin": {"name":"企鵝紳士", "rarity":"稀有", "rarity_color":"42A5F5",
-                "egg_color":"2C3E50", "desc":"搖搖擺擺的小紳士！"},
-    "fox":     {"name":"狡黠狐狸", "rarity":"稀有", "rarity_color":"42A5F5",
-                "egg_color":"E8572E", "desc":"聰明伶俐，愛惡作劇！"},
-    "dragon":  {"name":"神秘小龍", "rarity":"傳說", "rarity_color":"FFD700",
-                "egg_color":"7B2FBE", "desc":"千年一見的珍稀生物！"},
+    "貓咪": {"name":"橘橘貓咪", "rarity":"普通", "rarity_color":"78909C",
+             "egg_color":"FF8C42", "desc":"一隻調皮的橘貓，愛撒嬌！"},
+    "兔兔": {"name":"雪白兔兔", "rarity":"普通", "rarity_color":"78909C",
+             "egg_color":"F4C2C2", "desc":"圓滾滾的雪白兔子！"},
+    "企鵝": {"name":"企鵝紳士", "rarity":"稀有", "rarity_color":"42A5F5",
+             "egg_color":"2C3E50", "desc":"搖搖擺擺的小紳士！"},
+    "狐狸": {"name":"狡黠狐狸", "rarity":"稀有", "rarity_color":"42A5F5",
+             "egg_color":"E8572E", "desc":"聰明伶俐，愛惡作劇！"},
+    "小龍": {"name":"神秘小龍", "rarity":"傳說", "rarity_color":"FFD700",
+             "egg_color":"7B2FBE", "desc":"千年一見的珍稀生物！"},
 }
-GACHA_WEIGHTS = {"cat": 35, "bunny": 30, "penguin": 18, "fox": 12, "dragon": 5}
+GACHA_WEIGHTS = {"貓咪": 35, "兔兔": 30, "企鵝": 18, "狐狸": 12, "小龍": 5}
 
 # 孵蛋背景星星（模組載入時隨機生成一次）
 _EGG_STARS = [(random.randint(5, 435), random.randint(5, 350)) for _ in range(50)]
@@ -200,15 +202,21 @@ DEFAULT_DATA: dict = {
     "bonus_mult":    1,
     "last_checkin":  "",
     "inventory":     {},
-    "first_launch":  True,
+    "first_launch":  False,
     "unlocked_chars": [],
-    "stats": {"pomodoro_done":0,"coins_earned":0,"coins_spent":0,"items_used":0},
+    "stats": {
+        "pomodoro_done": 0, "coins_earned": 0, "coins_spent": 0, "items_used": 0,
+        "focus_minutes": 0, "today_count": 0,  "today_date":  "",
+        "streak_days":   0, "last_focus_date": "",
+    },
     "settings": {
         "work_min":25,"rest_min":5,"long_rest_min":15,
         "sessions_before_long":4,"auto_start":False,
         "always_on_top":True,
         "character":"default",
+        "todo_remind_before_min": 5,
     },
+    "todos": [],
 }
 
 
@@ -363,6 +371,52 @@ class PetModel:
         self._d["stats"][key] = self._d["stats"].get(key, 0) + val
         self._dirty()
 
+    def set_stat(self, key: str, val) -> None:
+        self._d["stats"][key] = val
+        self._dirty()
+
+    @property
+    def todos(self) -> list:
+        todos = self._d.setdefault("todos", [])
+        # 補齊新欄位（舊格式相容）
+        for t in todos:
+            t.setdefault("priority", "medium")
+            t.setdefault("category", "其他")
+            t.setdefault("due_datetime", "")
+            t.setdefault("remind_minutes", 0)
+            t.setdefault("reminded", False)
+            t.setdefault("note", "")
+        return todos
+
+    def add_todo(self, text: str, priority: str = "medium", category: str = "其他",
+                 due: str = "", remind: int = 0, note: str = ""):
+        self._d.setdefault("todos", []).append({
+            "id": uuid.uuid4().hex[:8], "text": text, "done": False,
+            "priority": priority, "category": category,
+            "due_datetime": due, "remind_minutes": remind,
+            "reminded": False, "note": note,
+        })
+        self._dirty()
+
+    def update_todo(self, tid: str, **fields):
+        for t in self._d.get("todos", []):
+            if t["id"] == tid:
+                t.update(fields); self._dirty(); return
+
+    def toggle_todo(self, tid: str):
+        for t in self._d.get("todos", []):
+            if t["id"] == tid:
+                t["done"] = not t["done"]; self._dirty(); return
+
+    def remove_todo(self, tid: str):
+        self._d["todos"] = [t for t in self._d.get("todos", []) if t["id"] != tid]
+        self._dirty()
+
+    def mark_reminded(self, tid: str):
+        for t in self._d.get("todos", []):
+            if t["id"] == tid:
+                t["reminded"] = True; self._dirty(); return
+
     def patch_settings(self, **kw):
         self._d["settings"].update(kw)
         self._dirty()
@@ -394,18 +448,24 @@ def _list_characters(unlocked_chars=None) -> list[tuple[str, str]]:
         except Exception as e:
             print(f"[Characters] 讀取名稱設定失敗：{e}")
 
-    result = [(name_map.get("default", "預設"), "default")]
+    result = [(name_map.get("default", "帥潮教授"), "default")]
     if os.path.isdir(assets):
         for folder in sorted(os.listdir(assets)):
-            if folder == "default":
+            if folder in ("default", "帥潮教授"):  # 帥潮教授 = default 的子目錄，避免重複
                 continue
             subdir = os.path.join(assets, folder)
-            if os.path.isdir(subdir) and any(
-                os.path.isdir(os.path.join(subdir, s)) for s in STATES
-            ):
+            if not (os.path.isdir(subdir) and any(
+                    os.path.isdir(os.path.join(subdir, s)) for s in STATES)):
+                continue
+            if folder in GACHA_POOL:
+                # GACHA 角色：只有解鎖才顯示
+                if unlocked_chars and folder in unlocked_chars:
+                    result.append((name_map.get(folder, folder), folder))
+            else:
+                # FREE_CHARS 或自訂匯入角色：永遠顯示
                 result.append((name_map.get(folder, folder), folder))
 
-    # 加入已解鎖的抽蛋角色（即使資料夾尚未存在）
+    # 已解鎖但資料夾尚未存在的抽蛋角色
     if unlocked_chars:
         existing = {v for _, v in result}
         for char_id in unlocked_chars:
@@ -425,7 +485,8 @@ class AnimationCache:
         if key in self._cache:
             return self._cache[key]
         if character == "default":
-            folder = resource_path(os.path.join("assets", state))
+            prof = resource_path(os.path.join("assets", "帥潮教授", state))
+            folder = prof if os.path.isdir(prof) else resource_path(os.path.join("assets", state))
         else:
             folder = resource_path(os.path.join("assets", character, state))
         frames = []
@@ -450,6 +511,13 @@ class AnimationCache:
             return idle_frames
         self._cache[key] = frames
         return frames
+
+    def invalidate(self, character: str = None):
+        if character:
+            self._cache = {k: v for k, v in self._cache.items()
+                           if not k.startswith(f"{character}/")}
+        else:
+            self._cache.clear()
 
 
 class MusicPlayer:
@@ -487,6 +555,44 @@ class MusicPlayer:
         if was_playing:
             self._hard_stop()
             self.play()
+
+    def get_tracks(self) -> list:
+        """回傳音樂清單（只含檔名，不含副檔名）。"""
+        self._scan_tracks()
+        return [os.path.splitext(os.path.basename(t))[0] for t in self._tracks]
+
+    def play_index(self, idx: int):
+        """播放指定索引的音樂。"""
+        if not PYGAME_OK or not self._tracks: return
+        self._index = idx % len(self._tracks)
+        self._path  = self._tracks[self._index]
+        if self._playing:
+            self._hard_stop()
+        self.play()
+
+    def delete_track(self, idx: int) -> bool:
+        """從磁碟刪除指定索引的音樂，回傳是否成功。"""
+        self._scan_tracks()
+        if not self._tracks or idx >= len(self._tracks): return False
+        path = self._tracks[idx]
+        was_this = (self._playing and self._path == path)
+        try:
+            os.remove(path)
+        except Exception as e:
+            print(f"[Music] 刪除失敗: {e}"); return False
+        self._scan_tracks()
+        if was_this:
+            if self._tracks:
+                self._index = 0; self._path = self._tracks[0]
+                self._hard_stop(); self.play()
+            else:
+                self._hard_stop()
+        return True
+
+    @property
+    def current_track_name(self) -> str:
+        if not self._path: return ""
+        return os.path.splitext(os.path.basename(self._path))[0]
 
     def play(self):
         if not PYGAME_OK: return
@@ -1269,6 +1375,8 @@ class EggGachaScreen:
                 weights=[GACHA_WEIGHTS[k] for k in GACHA_POOL.keys()],
                 k=1
             )[0]
+            self._result_tk_frames: list = []
+            self._load_result_sprite()
         else:
             self._status_var.set(f"繼續點！還需 {remaining} 下 💥")
 
@@ -1349,25 +1457,46 @@ class EggGachaScreen:
         for x1, y1, x2, y2 in self._cracks:
             c.create_line(ex+x1, ey+y1, ex+x2, ey+y2, fill="#1A1A2E", width=2)
 
+    def _load_result_sprite(self):
+        if not PIL_OK or not self._result: return
+        folder = resource_path(os.path.join("assets", self._result, "idle"))
+        if not os.path.isdir(folder): return
+        pngs = sorted([f for f in os.listdir(folder) if f.lower().endswith(".png")], key=_nat_key)
+        size = 130
+        bg_col = (26, 27, 46, 255)
+        for p in pngs:
+            try:
+                img = Image.open(os.path.join(folder, p)).convert("RGBA")
+                bg  = Image.new("RGBA", img.size, bg_col)
+                bg.paste(img, mask=img.split()[3])
+                self._result_tk_frames.append(
+                    ImageTk.PhotoImage(bg.convert("RGB").resize((size, size), Image.LANCZOS)))
+            except Exception: pass
+
     def _draw_result(self, c, alpha):
         if not self._result or self._result not in GACHA_POOL:
             return
         info = GACHA_POOL[self._result]
         cx, cy = self.EGG_W // 2, self.EGG_H // 2
-        g = int(240 * alpha)
+        g  = int(240 * alpha)
         wc = f"#{g:02x}{g:02x}{min(255,g+15):02x}"
         rh = info["rarity_color"]
-        ri = int(int(rh[0:2],16)*alpha)
-        gi = int(int(rh[2:4],16)*alpha)
-        bi = int(int(rh[4:6],16)*alpha)
-        rc = f"#{ri:02x}{gi:02x}{bi:02x}"
-        c.create_text(cx, cy-52, text="✨", font=("Segoe UI Emoji", 32), fill=wc)
-        c.create_text(cx, cy-8,  text=info["name"],
-                      font=("Microsoft JhengHei", 22, "bold"), fill=wc)
-        c.create_text(cx, cy+32, text=f"【{info['rarity']}】",
-                      font=("Microsoft JhengHei", 14, "bold"), fill=rc)
-        c.create_text(cx, cy+62, text=info["desc"],
-                      font=("Microsoft JhengHei", 11), fill=wc)
+        rc = (f"#{int(int(rh[0:2],16)*alpha):02x}"
+              f"{int(int(rh[2:4],16)*alpha):02x}"
+              f"{int(int(rh[4:6],16)*alpha):02x}")
+        # 真實角色圖片
+        if self._result_tk_frames:
+            fidx = (self._phase_t // 5) % len(self._result_tk_frames)
+            c.create_image(cx, cy - 10, image=self._result_tk_frames[fidx], anchor="center")
+        else:
+            c.create_text(cx, cy - 52, text="✨", font=("Segoe UI Emoji", 32), fill=wc)
+        # 角色名稱、稀有度、描述
+        c.create_text(cx, cy + 48, text=info["name"],
+                      font=("Microsoft JhengHei", 20, "bold"), fill=wc)
+        c.create_text(cx, cy + 74, text=f"【{info['rarity']}】",
+                      font=("Microsoft JhengHei", 13, "bold"), fill=rc)
+        c.create_text(cx, cy + 98, text=info["desc"],
+                      font=("Microsoft JhengHei", 10), fill=wc)
 
     def _gen_explosion(self, ex, ey):
         t = self._egg
@@ -1463,6 +1592,11 @@ class FarewellScreen:
         self._stars = [(random.randint(0, self.W), random.randint(0, int(self.CVS_H * 0.55)))
                        for _ in range(45)]
 
+        # 預載真實角色 sprite（10 個縮放尺寸）
+        self._sprite_frames: list = []  # [scale_idx][frame_idx] = ImageTk.PhotoImage
+        self._sprite_sizes:  list = []  # [scale_idx] = float
+        self._load_sprites(char_id)
+
         self._build()
         self._tick()
 
@@ -1486,6 +1620,9 @@ class FarewellScreen:
         hdr.pack(fill="x", padx=24, pady=(16, 4))
         tk.Label(hdr, text="⛩️  放生告別", bg="#0B0C1A", fg="#FFD580",
                  font=("Microsoft JhengHei", 17, "bold"), anchor="w").pack(side="left")
+        tk.Button(hdr, text="略過 ▶▶", bg="#1A1A30", fg="#666",
+                  relief="flat", font=("Arial", 9), cursor="hand2",
+                  command=self._skip).pack(side="right", padx=4)
         tk.Label(hdr, text=f"「{self._name}」的旅程", bg="#0B0C1A",
                  fg="#AA8855", font=("Microsoft JhengHei", 11), anchor="e").pack(side="right")
 
@@ -1521,6 +1658,48 @@ class FarewellScreen:
             relief="flat", padx=28, pady=12, cursor="hand2",
             command=self._finish
         )
+
+    # ── Sprite 預載 ─────────────────────────────────────────────
+
+    def _load_sprites(self, char_id: str):
+        if not PIL_OK: return
+        if char_id == "default":
+            folder = resource_path(os.path.join("assets", "idle"))
+        else:
+            folder = resource_path(os.path.join("assets", char_id, "idle"))
+        if not os.path.isdir(folder): return
+        pngs = sorted([f for f in os.listdir(folder) if f.lower().endswith(".png")],
+                      key=_nat_key)
+        if not pngs: return
+        try:
+            raw = [Image.open(os.path.join(folder, p)).convert("RGBA") for p in pngs]
+        except Exception as e:
+            print(f"[Farewell] sprite 載入失敗: {e}"); return
+        for scale in [1.0, 0.85, 0.70, 0.55, 0.42, 0.30, 0.22, 0.16, 0.12, 0.08]:
+            size = max(8, int(80 * scale))
+            try:
+                self._sprite_frames.append([
+                    ImageTk.PhotoImage(r.resize((size, size), Image.LANCZOS)) for r in raw
+                ])
+                self._sprite_sizes.append(scale)
+            except Exception:
+                pass
+
+    def _draw_sprite(self, c, px: int, py: int, scale: float, frame_idx: int):
+        if not self._sprite_frames:
+            self._draw_chibi(c, px, py, scale)
+            return
+        si = min(range(len(self._sprite_sizes)),
+                 key=lambda i: abs(self._sprite_sizes[i] - scale))
+        frames = self._sprite_frames[si]
+        c.create_image(px, py, image=frames[frame_idx % len(frames)], anchor="s")
+
+    def _skip(self):
+        self._running = False
+        char_id = self._char_id
+        try: self._win.destroy()
+        except Exception: pass
+        self._on_complete(char_id)
 
     # ── 動畫主迴圈 ──────────────────────────────────────────────
 
@@ -1597,7 +1776,8 @@ class FarewellScreen:
         scale = max(0.15, 1.0 - progress * 0.82)
         bob = int(math.sin(self._frame * 0.35) * 4 * scale) if self._walking else 0
 
-        self._draw_chibi(c, px, py + bob, scale)
+        frame_idx = self._frame // 6
+        self._draw_sprite(c, px, py + bob, scale, frame_idx)
 
         # 走路更新
         if self._walking and px < W + 60:
@@ -1915,27 +2095,682 @@ class StatsView:
     def _refresh(self):
         if not self._frame: return
         for c in self._frame.winfo_children(): c.destroy()
+        # 同時清除之前可能殘留的森林 Label
+        win = self._frame.master
+        for c in win.winfo_children():
+            if getattr(c, "_forest_label", False):
+                c.destroy()
         m  = self._ctrl.model
         s  = m.stats
         hp = m.happiness
         hpc = "#C62828" if hp < 30 else ("#F57F17" if hp < 60 else "#2E7D32")
+        focus_min = s.get("focus_minutes", 0)
+        focus_str = (f"{focus_min // 60} 小時 {focus_min % 60} 分"
+                     if focus_min >= 60 else f"{focus_min} 分鐘")
         rows = [
-            ("🎭","角色名稱",  m.pet_name,              "#37474F"),
-            ("❤️","目前心情",  f"{hp}%",                hpc),
-            ("💰","目前金幣",  f"{m.coins} 枚",         "#E65100"),
-            ("🍅","完成番茄鐘",f"{s['pomodoro_done']} 次","#37474F"),
-            ("💰","累計獲得",  f"{s['coins_earned']} 枚","#37474F"),
-            ("🛍️","累計消費", f"{s['coins_spent']} 枚", "#37474F"),
-            ("🎒","使用道具",  f"{s.get('items_used',0)} 次","#37474F"),
-            ("📅","上次簽到",  m.last_checkin or "—",   "#37474F"),
+            ("🎭", "角色名稱",  m.pet_name,                          "#37474F"),
+            ("❤️", "目前心情",  f"{hp}%",                            hpc),
+            ("💰", "目前金幣",  f"{m.coins} 枚",                     "#E65100"),
+            ("🍅", "完成番茄鐘",f"{s['pomodoro_done']} 次",          "#37474F"),
+            ("⏱️", "累積專注",  focus_str,                           "#1565C0"),
+            ("📅", "今日番茄",  f"{s.get('today_count',0)} 次",      "#6A1B9A"),
+            ("🔥", "連續天數",  f"{s.get('streak_days',0)} 天",      "#BF360C"),
+            ("💰", "累計獲得",  f"{s['coins_earned']} 枚",           "#37474F"),
+            ("🛍️", "累計消費", f"{s['coins_spent']} 枚",            "#37474F"),
+            ("🎒", "使用道具",  f"{s.get('items_used',0)} 次",       "#37474F"),
+            ("🗓️", "上次簽到",  m.last_checkin or "—",              "#37474F"),
         ]
         for i, (icon, lbl, val, vc) in enumerate(rows):
-            tk.Label(self._frame, text=icon, font=("Arial",12),
-                     width=3, anchor="e").grid(row=i, column=0, pady=4)
-            tk.Label(self._frame, text=lbl, font=("Arial",10),
-                     fg="#555", anchor="w", width=12).grid(row=i, column=1, sticky="w", padx=4)
-            tk.Label(self._frame, text=val, font=("Arial",10,"bold"),
-                     fg=vc, anchor="w").grid(row=i, column=2, sticky="w", padx=6)
+            tk.Label(self._frame, text=icon, font=("Arial", 13),
+                     anchor="w").grid(row=i, column=0, pady=3, padx=(12, 4), sticky="w")
+            tk.Label(self._frame, text=lbl, font=("Arial", 10),
+                     fg="#555", anchor="w", width=12).grid(row=i, column=1, sticky="w")
+            tk.Label(self._frame, text=val, font=("Arial", 10, "bold"),
+                     fg=vc, anchor="w").grid(row=i, column=2, sticky="w", padx=(4, 12))
+        # 森林視覺
+        total = s.get("pomodoro_done", 0)
+        level = min(total // 10, 3)
+        tree  = ["🌱", "🌿", "🌳", "🌲"][level]
+        trees = tree * min(total, 10)
+        suffix = f"  ×{total}" if total > 10 else ""
+        forest_text = (f"🌳 我的森林：{trees}{suffix}"
+                       if total > 0 else "🌱 完成番茄鐘，開始種下第一棵樹！")
+        sep = ttk.Separator(win)
+        sep._forest_label = True
+        sep.pack(fill="x", padx=12, pady=(6, 2))
+        lbl_f = tk.Label(win, text=forest_text, font=("Arial", 11),
+                         fg="#2E7D32", pady=6)
+        lbl_f._forest_label = True
+        lbl_f.pack()
+
+
+# ── 待辦清單 ──────────────────────────────────────────────────
+
+_PRIORITY_ICON   = {"high": "🔴", "medium": "🟡", "low": "🟢"}
+_PRIORITY_LABEL  = {"high": "高", "medium": "中", "low": "低"}
+_PRIO_COLORS     = {"high": "#E53935", "medium": "#FB8C00", "low": "#43A047"}
+_CATEGORIES      = ["讀書", "工作", "運動", "生活", "其他"]
+_CAT_ICONS       = {"讀書":"📚","工作":"💼","運動":"🏃","生活":"🏠","其他":"📌"}
+_GROUP_LABELS    = {
+    0: ("逾期",      "#E53935"),
+    1: ("今天",      "#FB8C00"),
+    2: ("明天",      "#1565C0"),
+    3: ("本週",      "#555555"),
+    4: ("之後",      "#777777"),
+    5: ("無截止日期","#999999"),
+}
+
+
+def _fmt_due(due_str: str, now) -> tuple:
+    """將 ISO 日期字串轉為 (顯示文字, 顏色) 的相對格式。"""
+    from datetime import datetime as _dt
+    try:
+        dt    = _dt.fromisoformat(due_str)
+        delta = (dt.date() - now.date()).days
+        t_str = dt.strftime("%H:%M")
+        if delta < -1: return f"逾期 {-delta} 天", "#E53935"
+        if delta == -1: return f"昨天 {t_str}",    "#E53935"
+        if delta == 0:  return f"今天 {t_str}",    "#FB8C00"
+        if delta == 1:  return f"明天 {t_str}",    "#1565C0"
+        if delta < 7:   return dt.strftime(f"%a {t_str}"), "#555"
+        return dt.strftime(f"%m/%d {t_str}"), "#777"
+    except Exception:
+        return due_str, "#777"
+
+
+def _todo_group(t: dict, today) -> int:
+    """回傳任務所屬分組 key (0=逾期 … 5=無截止日期)。"""
+    from datetime import datetime as _dt
+    due = t.get("due_datetime", "")
+    if not due: return 5
+    try:
+        delta = (_dt.fromisoformat(due).date() - today).days
+        if delta < 0:  return 0
+        if delta == 0: return 1
+        if delta == 1: return 2
+        if delta < 7:  return 3
+        return 4
+    except Exception:
+        return 5
+
+
+def _play_reminder_chime():
+    """播放三音上行提示音（C5-E5-G5），背景執行緒，不阻塞主迴圈。"""
+    def _run():
+        try:
+            for freq, dur in [(523, 120), (659, 120), (784, 250)]:
+                winsound.Beep(freq, dur)
+        except Exception:
+            pass
+    threading.Thread(target=_run, daemon=True).start()
+
+
+class TodoEditDialog:
+    """新增/編輯單一待辦事項的對話框。"""
+
+    def __init__(self, master, ctrl, todo: dict = None, on_save=None):
+        self._master      = master
+        self._ctrl        = ctrl
+        self._todo        = todo
+        self._on_save     = on_save
+        self._priority_var = None
+        self._prio_btns   = {}
+        self._build()
+
+    def _build(self):
+        from datetime import datetime as _dt
+        is_edit = bool(self._todo)
+        title   = "✏️ 編輯待辦" if is_edit else "📝 新增待辦"
+        w = self._win = tk.Toplevel(self._master)
+        w.title(title)
+        w.resizable(True, False)
+        w.grab_set()
+        w.wm_attributes("-topmost", True)
+        w.minsize(360, 0)
+
+        # ── 標題 ─────────────────────────────────────────────
+        hdr = tk.Frame(w, bg="#DB4035", pady=10); hdr.pack(fill="x")
+        tk.Label(hdr, text=title, font=("Arial", 12, "bold"),
+                 bg="#DB4035", fg="white").pack()
+
+        # ── 表單主體 ──────────────────────────────────────────
+        body = tk.Frame(w, padx=20, pady=12); body.pack(fill="both", expand=True)
+        body.columnconfigure(1, weight=1)
+
+        row = 0
+
+        # 任務名稱
+        tk.Label(body, text="任務名稱", font=("Arial", 9), fg="#888", anchor="w").grid(
+            row=row, column=0, columnspan=2, sticky="w")
+        row += 1
+        self._text_var = tk.StringVar(value=self._todo["text"] if is_edit else "")
+        tk.Entry(body, textvariable=self._text_var, font=("Arial", 11)).grid(
+            row=row, column=0, columnspan=2, sticky="ew", pady=(2, 10))
+        row += 1
+
+        # 優先程度（toggle buttons）
+        tk.Label(body, text="優先程度", font=("Arial", 9), fg="#888", anchor="w").grid(
+            row=row, column=0, columnspan=2, sticky="w")
+        row += 1
+        self._priority_var = tk.StringVar(
+            value=self._todo["priority"] if is_edit else "medium")
+        pf = tk.Frame(body); pf.grid(row=row, column=0, columnspan=2, sticky="w", pady=(2, 10))
+
+        def _select_prio(val):
+            self._priority_var.set(val)
+            for v, (b, c) in self._prio_btns.items():
+                b.config(bg=c if v == val else "white",
+                         fg="white" if v == val else c,
+                         relief="solid" if v == val else "flat")
+
+        for val, lbl, col in [("high", "● 高", "#E53935"),
+                               ("medium", "● 中", "#FB8C00"),
+                               ("low",  "● 低", "#43A047")]:
+            btn = tk.Button(pf, text=lbl, font=("Arial", 9, "bold"),
+                            relief="flat", bd=0, padx=12, pady=5,
+                            bg="white", fg=col, cursor="hand2",
+                            command=lambda v=val: _select_prio(v))
+            btn.pack(side="left", padx=(0, 6))
+            self._prio_btns[val] = (btn, col)
+        _select_prio(self._priority_var.get())
+        row += 1
+
+        # 分類
+        tk.Label(body, text="分類", font=("Arial", 9), fg="#888", anchor="w").grid(
+            row=row, column=0, sticky="w")
+        self._cat_var = tk.StringVar(
+            value=self._todo["category"] if is_edit else "其他")
+        ttk.Combobox(body, textvariable=self._cat_var, values=_CATEGORIES,
+                     state="readonly", width=12).grid(
+            row=row, column=1, sticky="w", pady=(2, 10))
+        row += 1
+
+        ttk.Separator(body).grid(row=row, column=0, columnspan=2, sticky="ew", pady=6)
+        row += 1
+
+        # 解析預設日期時間
+        now = _dt.now()
+        due = self._todo.get("due_datetime", "") if is_edit else ""
+        try:
+            ddt = _dt.fromisoformat(due) if due else now
+        except Exception:
+            ddt = now
+        dy, dm, dd, dh, dmin = ddt.year, ddt.month, ddt.day, ddt.hour, ddt.minute
+
+        # 到期日期 + 時間（同一行）
+        tk.Label(body, text="到期時間", font=("Arial", 9), fg="#888", anchor="w").grid(
+            row=row, column=0, columnspan=2, sticky="w")
+        row += 1
+        dt_frm = tk.Frame(body); dt_frm.grid(row=row, column=0, columnspan=2, sticky="w", pady=(2, 10))
+
+        self._year  = tk.Spinbox(dt_frm, from_=2024, to=2035, width=5, font=("Arial", 10))
+        self._month = tk.Spinbox(dt_frm, from_=1, to=12,   width=3, font=("Arial", 10))
+        self._day   = tk.Spinbox(dt_frm, from_=1, to=31,   width=3, font=("Arial", 10))
+        self._hour  = tk.Spinbox(dt_frm, from_=0, to=23,   width=3, font=("Arial", 10), wrap=True)
+        self._min   = tk.Spinbox(dt_frm, from_=0, to=59,   width=3, font=("Arial", 10), wrap=True)
+        for sp, val in [(self._year, dy), (self._month, f"{dm:02d}"),
+                        (self._day, f"{dd:02d}"), (self._hour, f"{dh:02d}"),
+                        (self._min, f"{dmin:02d}")]:
+            sp.delete(0, "end"); sp.insert(0, val)
+
+        for widget, lbl in [(self._year,"年"),(self._month,"月"),(self._day,"日 "),
+                            (self._hour,"時"),(self._min,"分")]:
+            widget.pack(side="left")
+            tk.Label(dt_frm, text=lbl, font=("Arial", 9), fg="#555").pack(side="left")
+        row += 1
+
+        # 提醒
+        tk.Label(body, text="提醒", font=("Arial", 9), fg="#888", anchor="w").grid(
+            row=row, column=0, columnspan=2, sticky="w")
+        row += 1
+        remind_val = self._todo.get("remind_minutes", 30) if is_edit else 30
+        self._remind_en  = tk.BooleanVar(value=(remind_val > 0))
+        self._remind_var = tk.IntVar(value=max(1, remind_val))
+        rf = tk.Frame(body); rf.grid(row=row, column=0, columnspan=2, sticky="w", pady=(2, 10))
+        tk.Checkbutton(rf, text="到期前", variable=self._remind_en,
+                       font=("Arial", 10)).pack(side="left")
+        tk.Spinbox(rf, from_=1, to=1440, width=5, textvariable=self._remind_var,
+                   font=("Arial", 10)).pack(side="left", padx=4)
+        tk.Label(rf, text="分鐘提醒", font=("Arial", 10), fg="#555").pack(side="left")
+        row += 1
+
+        # 備註
+        tk.Label(body, text="備註（選填）", font=("Arial", 9), fg="#888", anchor="w").grid(
+            row=row, column=0, columnspan=2, sticky="w")
+        row += 1
+        self._note_txt = tk.Text(body, height=2, font=("Arial", 10), relief="solid", bd=1)
+        self._note_txt.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(2, 4))
+        if is_edit and self._todo.get("note"):
+            self._note_txt.insert("1.0", self._todo["note"])
+        row += 1
+
+        # ── 按鈕列 ───────────────────────────────────────────
+        ttk.Separator(w).pack(fill="x", padx=10, pady=4)
+        btn_row = tk.Frame(w, pady=8); btn_row.pack()
+        tk.Button(btn_row, text="取消", width=9, relief="flat",
+                  bg="#78909C", fg="white", font=("Arial", 10),
+                  command=w.destroy).pack(side="left", padx=8)
+        tk.Button(btn_row, text="💾  儲存", width=10, relief="flat",
+                  bg="#DB4035", fg="white", font=("Arial", 10, "bold"),
+                  activebackground="#C0392B",
+                  command=self._save).pack(side="left", padx=8)
+
+    def _save(self):
+        text = self._text_var.get().strip()
+        if not text:
+            tk.messagebox.showwarning("提示", "請輸入任務名稱", parent=self._win); return
+        try:
+            y  = int(self._year.get());  mo = int(self._month.get())
+            d  = int(self._day.get());   h  = int(self._hour.get())
+            mi = int(self._min.get())
+            due_str = f"{y:04d}-{mo:02d}-{d:02d}T{h:02d}:{mi:02d}"
+        except Exception:
+            due_str = ""
+        remind   = self._remind_var.get() if self._remind_en.get() else 0
+        note_txt = self._note_txt.get("1.0", "end").strip()
+
+        if self._todo:
+            # 編輯模式：直接 update（update_todo 接受任意 key-value）
+            self._ctrl.model.update_todo(self._todo["id"],
+                text=text,
+                priority=self._priority_var.get(),
+                category=self._cat_var.get(),
+                due_datetime=due_str,
+                remind_minutes=remind,
+                reminded=False,
+                note=note_txt)
+        else:
+            # 新增模式：使用正確的參數名（due= 不是 due_datetime=）
+            self._ctrl.model.add_todo(
+                text=text,
+                priority=self._priority_var.get(),
+                category=self._cat_var.get(),
+                due=due_str,
+                remind=remind,
+                note=note_txt)
+        try: self._win.destroy()
+        except Exception: pass
+        if self._on_save: self._on_save()
+
+
+class TodoView:
+    """待辦清單視窗 — Todoist 風格：分組顯示、左側色條、相對日期、快速新增。"""
+
+    _FILTER_OPTS  = ["全部", "未完成", "今天", "已完成"]
+    _PLACEHOLDER  = "＋ 輸入新任務，按 Enter 快速新增…"
+
+    def __init__(self, master, ctrl):
+        self._master      = master
+        self._ctrl        = ctrl
+        self._win         = None
+        self._list_frame  = None
+        self._filter_var  = None
+        self._cvs         = None
+        self._stat_lbl    = None
+        self._quick_entry = None
+
+    def open(self):
+        if self._win and self._win.winfo_exists():
+            self._win.lift(); self._refresh(); return
+        self._build()
+
+    # ── 建構 ────────────────────────────────────────────────────
+
+    def _build(self):
+        w = self._win = tk.Toplevel(self._master)
+        w.title("📋 待辦清單")
+        w.resizable(True, True)
+        w.minsize(480, 420)
+
+        # 全視窗 grid：只有 row=2（清單）可延伸
+        w.columnconfigure(0, weight=1)
+        w.rowconfigure(2, weight=1)
+
+        # row=0：標題列
+        hdr = tk.Frame(w, bg="#DB4035", pady=8)
+        hdr.grid(row=0, column=0, sticky="ew")
+        hdr.columnconfigure(0, weight=1)
+        tk.Label(hdr, text="📋 待辦清單", font=("Arial", 13, "bold"),
+                 bg="#DB4035", fg="white").pack(side="left", padx=14)
+        tk.Button(hdr, text="＋ 新增任務", font=("Arial", 9, "bold"),
+                  bg="#C0392B", fg="white", relief="flat", cursor="hand2",
+                  activebackground="#A93226",
+                  command=self._new_todo).pack(side="right", padx=10, pady=3)
+
+        # row=1：篩選 Tab
+        tab_frm = tk.Frame(w, bg="#FAFAFA", pady=0)
+        tab_frm.grid(row=1, column=0, sticky="ew")
+        self._filter_var = tk.StringVar(value="全部")
+        for opt in self._FILTER_OPTS:
+            tk.Radiobutton(tab_frm, text=f"  {opt}  ", variable=self._filter_var,
+                           value=opt, bg="#FAFAFA", fg="#555",
+                           font=("Arial", 10), indicatoron=False,
+                           selectcolor="#DB4035", activeforeground="white",
+                           relief="flat", padx=4, pady=6,
+                           command=self._refresh).pack(side="left")
+        tk.Frame(w, height=1, bg="#DDD").grid(row=1, column=0, sticky="sew")
+
+        # 滾動清單（row=2，可延伸）
+        container = tk.Frame(w, bg="white")
+        container.grid(row=2, column=0, sticky="nsew")
+        container.rowconfigure(0, weight=1)
+        container.columnconfigure(0, weight=1)
+
+        self._cvs = tk.Canvas(container, bg="white", highlightthickness=0)
+        sb = ttk.Scrollbar(container, orient="vertical", command=self._cvs.yview)
+        self._list_frame = tk.Frame(self._cvs, bg="white")
+        self._list_frame.bind("<Configure>",
+            lambda e: self._cvs.configure(scrollregion=self._cvs.bbox("all")))
+        self._cvs.create_window((0, 0), window=self._list_frame, anchor="nw")
+        self._cvs.configure(yscrollcommand=sb.set)
+        self._cvs.grid(row=0, column=0, sticky="nsew")
+        sb.grid(row=0, column=1, sticky="ns")
+        self._cvs.bind("<MouseWheel>",
+            lambda e: self._cvs.yview_scroll(-1 if e.delta > 0 else 1, "units"))
+
+        # 快速新增列（row=3，固定高度）
+        qa_frm = tk.Frame(w, bg="#F5F5F5", pady=8)
+        qa_frm.grid(row=3, column=0, sticky="ew")
+        qa_frm.columnconfigure(0, weight=1)
+        self._quick_entry = tk.Entry(qa_frm, font=("Arial", 11), fg="#AAA",
+                                     bg="#F5F5F5", relief="flat", bd=0,
+                                     insertbackground="#333")
+        self._quick_entry.grid(row=0, column=0, sticky="ew", padx=14, ipady=5)
+        self._quick_entry.insert(0, self._PLACEHOLDER)
+        self._quick_entry.bind("<FocusIn>",  self._qa_clear)
+        self._quick_entry.bind("<FocusOut>", self._qa_restore)
+        self._quick_entry.bind("<Return>",   self._quick_add)
+        tk.Frame(w, height=1, bg="#E0E0E0").grid(row=3, column=0, sticky="sew")
+
+        # row=4：底部統計 + 清除
+        bot = tk.Frame(w, pady=6)
+        bot.grid(row=4, column=0, sticky="ew", padx=12)
+        self._stat_lbl = tk.Label(bot, text="", font=("Arial", 10),
+                                   fg="#888", anchor="w")
+        self._stat_lbl.pack(side="left")
+        tk.Button(bot, text="清除已完成", font=("Arial", 9), relief="flat",
+                  fg="#E53935", bg="white",
+                  command=self._clear_done).pack(side="right")
+
+        # row=5：關閉按鈕
+        tk.Button(w, text="關閉", width=10, relief="flat",
+                  bg="#78909C", fg="white", font=("Arial", 10),
+                  command=w.destroy).grid(row=5, column=0, pady=(2, 10))
+
+        self._refresh()
+
+    # ── 資料 / 篩選 ─────────────────────────────────────────────
+
+    def _refresh(self):
+        if not self._list_frame: return
+        for c in self._list_frame.winfo_children(): c.destroy()
+        from datetime import datetime as _dt
+        now   = _dt.now()
+        today = now.date()
+        filt  = self._filter_var.get() if self._filter_var else "全部"
+        todos = self._ctrl.model.todos
+
+        def _sort_key(t):
+            due = t.get("due_datetime", "")
+            gk  = _todo_group(t, today)
+            if due:
+                try: return (gk, _dt.fromisoformat(due))
+                except Exception: pass
+            return (gk, _dt.max)
+
+        if filt == "全部":
+            self._render_grouped(sorted(todos, key=_sort_key), now, today, skip_done=False)
+        elif filt == "未完成":
+            items = [t for t in todos if not t["done"]]
+            self._render_grouped(sorted(items, key=_sort_key), now, today, skip_done=False)
+        elif filt == "今天":
+            items = [t for t in sorted(todos, key=_sort_key)
+                     if not t["done"] and t.get("due_datetime","") and
+                     self._is_today_or_overdue(t, today)]
+            if not items:
+                tk.Label(self._list_frame, text="🎉  今天沒有待辦，好好休息！",
+                         fg="#888", font=("Arial", 10), pady=20, bg="white").pack()
+            else:
+                for t in items: self._add_row(t, now, today)
+        elif filt == "已完成":
+            items = [t for t in todos if t["done"]]
+            if not items:
+                tk.Label(self._list_frame, text="尚未完成任何任務",
+                         fg="#CCC", font=("Arial", 10), pady=20, bg="white").pack()
+            else:
+                for t in items: self._add_row(t, now, today)
+
+        done_n = sum(1 for t in todos if t["done"])
+        if self._stat_lbl:
+            self._stat_lbl.config(text=f"✅ 已完成 {done_n} / 共 {len(todos)} 項")
+
+    @staticmethod
+    def _is_today_or_overdue(t: dict, today) -> bool:
+        from datetime import datetime as _dt
+        due = t.get("due_datetime", "")
+        if not due: return False
+        try: return _dt.fromisoformat(due).date() <= today
+        except Exception: return False
+
+    def _render_grouped(self, items, now, today, skip_done: bool):
+        """依分組 key 顯示區段 header + 任務列。"""
+        if not items:
+            tk.Label(self._list_frame, text="✅  什麼都沒有，很棒！",
+                     fg="#CCC", font=("Arial", 10), pady=20, bg="white").pack()
+            return
+        from itertools import groupby
+        for gk, group in groupby(items, key=lambda t: _todo_group(t, today)):
+            group_list = list(group)
+            if skip_done and all(t["done"] for t in group_list): continue
+            label, color = _GROUP_LABELS.get(gk, ("其他", "#888"))
+            self._section_header(label, color)
+            for t in group_list:
+                self._add_row(t, now, today)
+
+    def _section_header(self, label: str, color: str):
+        frm = tk.Frame(self._list_frame, bg="#F8F8F8", pady=5)
+        frm.pack(fill="x")
+        tk.Frame(frm, width=4, bg=color, height=16).pack(side="left", fill="y", padx=(8, 6))
+        tk.Label(frm, text=label, font=("Arial", 10, "bold"),
+                 fg=color, bg="#F8F8F8", anchor="w").pack(side="left")
+
+    # ── 任務列 ─────────────────────────────────────────────────
+
+    def _add_row(self, t: dict, now, today):
+        from datetime import datetime as _dt
+        due_str = t.get("due_datetime", "")
+        is_done = t["done"]
+        prio    = t.get("priority", "medium")
+        pcolor  = _PRIO_COLORS.get(prio, "#CCCCCC")
+
+        # 背景（逾期略帶紅、今日略帶橙）
+        bg = "white"
+        if not is_done and due_str:
+            try:
+                d = _dt.fromisoformat(due_str)
+                if d < now:              bg = "#FFF5F5"
+                elif d.date() == today:  bg = "#FFFBF0"
+            except Exception: pass
+
+        row = tk.Frame(self._list_frame, bg=bg, pady=6)
+        row.pack(fill="x", padx=2, pady=0)
+
+        # 左側優先度色條
+        tk.Frame(row, width=5, bg=pcolor).pack(side="left", fill="y")
+
+        # 勾選
+        var = tk.BooleanVar(value=is_done)
+        def on_toggle(tid=t["id"]):
+            self._ctrl.model.toggle_todo(tid); self._refresh()
+        tk.Checkbutton(row, variable=var, command=on_toggle,
+                       bg=bg, activebackground=bg).pack(side="left", padx=(6, 0))
+
+        # 任務名稱
+        txt_fg   = "#BBBBBB" if is_done else "#1A1A1A"
+        txt_font = ("Arial", 11, "overstrike") if is_done else ("Arial", 11, "bold")
+        tk.Label(row, text=t["text"], font=txt_font, fg=txt_fg,
+                 bg=bg, anchor="w", width=18).pack(side="left", padx=6)
+
+        # 相對日期
+        if due_str and not is_done:
+            disp, dfg = _fmt_due(due_str, now)
+            tk.Label(row, text=disp, font=("Arial", 10),
+                     fg=dfg, bg=bg).pack(side="left", padx=4)
+
+        # 分類標籤
+        cat = t.get("category", "")
+        if cat and not is_done:
+            tk.Label(row, text=f"{_CAT_ICONS.get(cat,'📌')} {cat}",
+                     font=("Arial", 9), fg="#AAA", bg=bg).pack(side="left", padx=3)
+
+        # 備註提示
+        note = t.get("note", "")
+        if note and not is_done:
+            tk.Label(row, text="💬", font=("Arial", 8), fg="#CCC",
+                     bg=bg).pack(side="left")
+
+        # 操作按鈕
+        def on_del(tid=t["id"]): self._ctrl.model.remove_todo(tid); self._refresh()
+        def on_edit(td=t): self._edit_todo(td)
+        tk.Button(row, text="🗑", font=("Arial", 8), relief="flat",
+                  fg="#DDD", bg=bg, activeforeground="#E53935",
+                  command=on_del).pack(side="right", padx=1)
+        tk.Button(row, text="✏", font=("Arial", 8), relief="flat",
+                  fg="#DDD", bg=bg, activeforeground="#1565C0",
+                  command=on_edit).pack(side="right")
+
+        # 分隔線
+        tk.Frame(self._list_frame, height=1, bg="#F0F0F0").pack(fill="x", padx=12)
+
+    # ── 動作 ────────────────────────────────────────────────────
+
+    def _new_todo(self):
+        TodoEditDialog(self._win, self._ctrl, todo=None, on_save=self._refresh)
+
+    def _edit_todo(self, t: dict):
+        TodoEditDialog(self._win, self._ctrl, todo=t, on_save=self._refresh)
+
+    def _clear_done(self):
+        done_ids = [t["id"] for t in self._ctrl.model.todos if t["done"]]
+        for tid in done_ids:
+            self._ctrl.model.remove_todo(tid)
+        self._refresh()
+
+    # ── 快速新增 ────────────────────────────────────────────────
+
+    def _qa_clear(self, _=None):
+        if self._quick_entry and self._quick_entry.get() == self._PLACEHOLDER:
+            self._quick_entry.delete(0, "end")
+            self._quick_entry.config(fg="#333")
+
+    def _qa_restore(self, _=None):
+        if self._quick_entry and not self._quick_entry.get():
+            self._quick_entry.insert(0, self._PLACEHOLDER)
+            self._quick_entry.config(fg="#AAA")
+
+    def _quick_add(self, _=None):
+        if not self._quick_entry: return
+        text = self._quick_entry.get().strip()
+        if not text or text == self._PLACEHOLDER: return
+        self._ctrl.model.add_todo(text)
+        self._quick_entry.delete(0, "end")
+        self._quick_entry.config(fg="#AAA")
+        self._quick_entry.insert(0, self._PLACEHOLDER)
+        self._refresh()
+
+
+# ── 音樂管理視窗 ──────────────────────────────────────────────
+
+class MusicView:
+    """音樂管理視窗：顯示播放清單，支援選播、刪除、匯入。"""
+
+    def __init__(self, master, music):
+        self._master = master
+        self._music  = music
+        self._win    = None
+        self._list_frame = None
+
+    def open(self):
+        if self._win and self._win.winfo_exists():
+            self._win.lift(); self._refresh(); return
+        self._build()
+
+    def _build(self):
+        w = self._win = tk.Toplevel(self._master)
+        w.title("🎵 音樂管理"); w.resizable(False, False)
+
+        hdr = tk.Frame(w, bg="#1A237E", pady=8); hdr.pack(fill="x")
+        tk.Label(hdr, text="🎵 音樂管理", font=("Arial", 13, "bold"),
+                 bg="#1A237E", fg="white").pack(side="left", padx=16)
+        tk.Button(hdr, text="📂 匯入音樂", font=("Arial", 9),
+                  bg="#3949AB", fg="white", relief="flat",
+                  command=self._import).pack(side="right", padx=12, pady=2)
+
+        ttk.Separator(w).pack(fill="x")
+        frm = tk.Frame(w, padx=10, pady=6); frm.pack(fill="both", expand=True)
+        self._list_frame = frm
+        self._refresh()
+        ttk.Separator(w).pack(fill="x", padx=10)
+
+        ctrl = tk.Frame(w, pady=8); ctrl.pack()
+        tk.Button(ctrl, text="▶  播放", bg="#43A047", fg="white",
+                  relief="flat", padx=10,
+                  command=lambda: self._music.play()).pack(side="left", padx=4)
+        tk.Button(ctrl, text="⏹  停止", bg="#E53935", fg="white",
+                  relief="flat", padx=10,
+                  command=lambda: self._music.stop()).pack(side="left", padx=4)
+        tk.Button(ctrl, text="關閉", bg="#78909C", fg="white",
+                  relief="flat", padx=10,
+                  command=w.destroy).pack(side="left", padx=4)
+
+    def _refresh(self):
+        if not self._list_frame: return
+        for c in self._list_frame.winfo_children(): c.destroy()
+        tracks = self._music.get_tracks()
+        cur    = self._music.current_track_name
+        if not tracks:
+            tk.Label(self._list_frame, text="沒有音樂，請先匯入！",
+                     fg="#888", font=("Arial", 10), pady=12).pack()
+            return
+        for i, name in enumerate(tracks):
+            row = tk.Frame(self._list_frame); row.pack(fill="x", pady=2)
+            is_cur = (name == cur)
+            icon = "▶  " if is_cur else "     "
+            fg   = "#43A047" if is_cur else "#222"
+            tk.Label(row, text=f"{icon}{i+1:02d}. {name}",
+                     font=("Arial", 10, "bold" if is_cur else "normal"),
+                     fg=fg, anchor="w", width=34).pack(side="left")
+            tk.Button(row, text="播放", font=("Arial", 8), relief="flat",
+                      bg="#1565C0", fg="white",
+                      command=lambda idx=i: self._play(idx)).pack(side="left", padx=2)
+            tk.Button(row, text="🗑", font=("Arial", 9), relief="flat",
+                      fg="#C62828",
+                      command=lambda idx=i: self._delete(idx)).pack(side="left")
+
+    def _play(self, idx: int):
+        self._music.play_index(idx); self._refresh()
+
+    def _delete(self, idx: int):
+        tracks = self._music.get_tracks()
+        if idx >= len(tracks): return
+        if not tk.messagebox.askyesno("確認刪除",
+                f"確定要從磁碟刪除「{tracks[idx]}」？",
+                parent=self._win): return
+        self._music.delete_track(idx); self._refresh()
+
+    def _import(self):
+        from tkinter import filedialog
+        fpath = filedialog.askopenfilename(
+            title="選擇音樂檔案",
+            filetypes=[("音樂", "*.mp3 *.ogg *.wav"), ("所有", "*.*")],
+            parent=self._win)
+        if not fpath: return
+        dest = resource_path(os.path.join("assets", "music", os.path.basename(fpath)))
+        try:
+            shutil.copy2(fpath, dest)
+        except Exception as e:
+            tk.messagebox.showerror("匯入失敗", str(e), parent=self._win); return
+        self._music._scan_tracks(); self._refresh()
 
 
 # ── 設定視窗 ─────────────────────────────────────────────────
@@ -2109,6 +2944,8 @@ class PetView:
         self._pack_v  = BackpackView(self._root, ctrl)
         self._stats_v = StatsView(self._root, ctrl)
         self._sett_v  = SettingsView(self._root, ctrl)
+        self._todo_v  = TodoView(self._root, ctrl)
+        self._music_v = MusicView(self._root, ctrl._music)
         self._bind_events()
         self._animate()
         self._hp_loop()
@@ -2201,6 +3038,8 @@ class PetView:
     def open_backpack(self):  self._pack_v.open()
     def open_stats(self):     self._stats_v.open()
     def open_settings(self):  self._sett_v.open()
+    def open_todos(self):     self._todo_v.open()
+    def open_music(self):     self._music_v.open()
 
     def show_info(self, title: str, msg: str):
         _info_dialog(self._root, title, msg)
@@ -2350,6 +3189,9 @@ class PetController:
         self._status          = "idle"
         self._checkin_id      = None
         self._idle_chat_id    = None
+        self._todo_idle_id    = None
+        self._todo_check_id   = None
+        self._todo_today_idx  = 0      # 今日待辦輪播指針
         self._eat_restore_id  = None
 
         cfg = model.settings
@@ -2367,8 +3209,14 @@ class PetController:
         )
         view.set_controller(self)
         self._schedule_idle_chat()
+        self._schedule_todo_remind()
+        self._schedule_todo_check()
         if self._model.first_launch:
-            self._root.after(400, self._show_egg_screen)
+            self._model.first_launch = False
+            self._root.after(800, lambda: self._view.show_speech(
+                "你好！我是帥潮教授 👋\n"
+                "完成番茄鐘賺金幣 🍅\n"
+                "存到 30 枚去商店買角色蛋 🥚", 8000))
 
     @property
     def model(self) -> PetModel:
@@ -2388,6 +3236,31 @@ class PetController:
         self._model.coins += reward
         self._model.inc_stat("coins_earned", reward)
         self._model.inc_stat("pomodoro_done")
+
+        # 累積專注時間
+        work_min = self._pomo._work_s // 60
+        self._model.inc_stat("focus_minutes", work_min)
+
+        # 今日番茄（跨日重置）
+        today = date.today().isoformat()
+        s = self._model.stats
+        if s.get("today_date") != today:
+            self._model.set_stat("today_count", 1)
+            self._model.set_stat("today_date", today)
+        else:
+            self._model.inc_stat("today_count")
+
+        # 連續天數
+        last = s.get("last_focus_date", "")
+        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        if last == today:
+            pass
+        elif last == yesterday:
+            self._model.inc_stat("streak_days")
+        else:
+            self._model.set_stat("streak_days", 1)
+        self._model.set_stat("last_focus_date", today)
+
         if mult > 1:
             self._model.bonus_mult = 1
 
@@ -2596,6 +3469,44 @@ class PetController:
         info = GACHA_POOL.get(char_id, {})
         self._view.show_info("⛩️ 放生", f"「{info.get('name', char_id)}」已自由啟程。\n感謝你的陪伴。")
 
+    def _import_character(self):
+        from tkinter import filedialog
+        folder = filedialog.askdirectory(title="選擇角色素材資料夾（含 idle/ 等子目錄）")
+        if not folder: return
+        char_id = os.path.basename(folder)
+        dest = resource_path(os.path.join("assets", char_id))
+        try:
+            shutil.copytree(folder, dest, dirs_exist_ok=True)
+        except Exception as e:
+            self._view.show_speech(f"❌ 匯入失敗：{e}", 5000); return
+        cfg_path = resource_path(os.path.join("assets", "characters.json"))
+        try:
+            with open(cfg_path, encoding="utf-8") as f:
+                cmap = json.load(f)
+        except Exception:
+            cmap = {}
+        if char_id not in cmap:
+            cmap[char_id] = char_id
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                json.dump(cmap, f, ensure_ascii=False, indent=2)
+        self._view._cache.invalidate(char_id)
+        self._view.show_speech(f"✨ 已匯入角色「{char_id}」！可在切換角色中選用。", 5000)
+
+    def _import_music(self):
+        from tkinter import filedialog
+        fpath = filedialog.askopenfilename(
+            title="選擇音樂檔案",
+            filetypes=[("音樂檔案", "*.mp3 *.ogg *.wav"), ("所有檔案", "*.*")])
+        if not fpath: return
+        fname = os.path.basename(fpath)
+        dest  = resource_path(os.path.join("assets", "music", fname))
+        try:
+            shutil.copy2(fpath, dest)
+        except Exception as e:
+            self._view.show_speech(f"❌ 匯入失敗：{e}", 5000); return
+        self._music._scan_tracks()
+        self._view.show_speech(f"🎵 已匯入「{fname}」！", 4000)
+
     def _on_egg_hatched(self, char_id: str, pet_name: str):
         if pet_name:
             self._model.pet_name = pet_name
@@ -2650,6 +3561,8 @@ class PetController:
                     "label": f"      ⛩️ 放生 {lbl}",
                     "cmd": lambda v=val: self.farewell_char(v),
                 })
+        char_subitems.append({"sep": True})
+        char_subitems.append({"label": "  ➕  匯入角色素材", "cmd": self._import_character})
 
         # ── 快速餵食子選單 ────────────────────────────────────
         foods = [(iid, cnt) for iid, cnt in inv.items() if iid in FOOD_IDS and cnt > 0]
@@ -2688,9 +3601,12 @@ class PetController:
 
         # ── 音樂子選單 ────────────────────────────────────────
         music_subitems = [
-            {"label": "  ▶️  播放",     "cmd": self._music.play},
-            {"label": "  ⏹️  關閉",     "cmd": self._music.stop},
-            {"label": "  🔀  切換音樂", "cmd": self._music.next},
+            {"label": "  ▶️  播放",      "cmd": self._music.play},
+            {"label": "  ⏹️  停止",      "cmd": self._music.stop},
+            {"label": "  🔀  下一首",    "cmd": self._music.next},
+            {"sep": True},
+            {"label": "  🎵  音樂管理（選曲 / 刪除 / 匯入）",
+             "cmd": self._view.open_music},
         ]
 
         # ── 主選單 ────────────────────────────────────────────
@@ -2711,6 +3627,7 @@ class PetController:
              "cmd": self._view.open_backpack},
             {"label": "  🎵  背景音樂",  "items": music_subitems},
             {"sep": True},
+            {"label": "  📋  待辦清單",  "cmd": self._view.open_todos},
             {"label": "  📊  統計數據",  "cmd": self._view.open_stats},
             {"label": "  ⚙️  設定",      "cmd": self._view.open_settings},
             {"sep": True},
@@ -2837,6 +3754,77 @@ class PetController:
             self._view.show_speech(random.choice(DIALOGUES["idle"]))
         self._schedule_idle_chat()
 
+    def _schedule_todo_remind(self):
+        self._cancel_todo_remind()
+        self._todo_idle_id = self._root.after(_TODO_REMIND_MS, self._do_todo_remind)
+
+    def _cancel_todo_remind(self):
+        if self._todo_idle_id:
+            self._root.after_cancel(self._todo_idle_id)
+            self._todo_idle_id = None
+
+    @staticmethod
+    def _is_today_todo(t: dict, today) -> bool:
+        from datetime import datetime as _dt
+        due = t.get("due_datetime", "")
+        if not due: return False
+        try: return _dt.fromisoformat(due).date() <= today
+        except Exception: return False
+
+    def _do_todo_remind(self):
+        from datetime import datetime as _dt, date
+        self._todo_idle_id = None
+        now   = _dt.now()
+        today = date.today()
+
+        # 今日（含逾期）未完成待辦 → 輪流顯示
+        today_items = [t for t in self._model.todos
+                       if not t["done"] and self._is_today_todo(t, today)]
+        if today_items:
+            idx = self._todo_today_idx % len(today_items)
+            t   = today_items[idx]
+            self._todo_today_idx += 1
+            disp, _ = _fmt_due(t["due_datetime"], now)
+            self._view.show_speech(f"📋 今日待辦：{t['text']}\n⏰ {disp}", 6000)
+        else:
+            # 無今日待辦 → 隨機提醒任一未完成
+            pending = [t for t in self._model.todos if not t["done"]]
+            if pending:
+                t = random.choice(pending)
+                self._view.show_speech(f"📋 別忘了：{t['text']}", 6000)
+        self._schedule_todo_remind()
+
+    def _schedule_todo_check(self):
+        self._cancel_todo_check()
+        self._todo_check_id = self._root.after(_TODO_CHECK_MS, self._do_todo_check)
+
+    def _cancel_todo_check(self):
+        if self._todo_check_id:
+            self._root.after_cancel(self._todo_check_id)
+            self._todo_check_id = None
+
+    def _do_todo_check(self):
+        from datetime import datetime as _dt
+        self._todo_check_id = None
+        now = _dt.now()
+        for t in self._model.todos:
+            if t.get("done") or t.get("reminded"): continue
+            due_str = t.get("due_datetime", "")
+            remind  = t.get("remind_minutes", 0)
+            if not due_str or remind == 0: continue
+            try:
+                due  = _dt.fromisoformat(due_str)
+                diff = (due - now).total_seconds() / 60
+                if diff <= remind:
+                    self._model.mark_reminded(t["id"])
+                    msg = (f"⏰ 「{t['text']}」\n" +
+                           (f"還有 {int(max(0,diff))} 分鐘到期！" if diff > 0 else "已到期！"))
+                    _play_reminder_chime()
+                    self._view.show_speech(msg, 7000)
+            except Exception:
+                pass
+        self._schedule_todo_check()
+
     def _confirm_quit(self):
         win = tk.Toplevel(self._root)
         win.resizable(False, False)
@@ -2876,6 +3864,8 @@ class PetController:
         self._pomo.pause()
         self._cancel_work_checkin()
         self._cancel_idle_chat()
+        self._cancel_todo_remind()
+        self._cancel_todo_check()
         if self._eat_restore_id:
             self._root.after_cancel(self._eat_restore_id)
             self._eat_restore_id = None
