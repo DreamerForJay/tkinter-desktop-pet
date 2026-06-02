@@ -13,4 +13,5 @@ data.json
 pet_save.json
 *.pdf
 *草稿*
+*Prompt*
 .venv/
