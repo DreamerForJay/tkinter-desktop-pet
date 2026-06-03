@@ -3845,6 +3845,22 @@ class PetController:
 
     # ── 狀態機 ────────────────────────────────────────────────
 
+    def _has_state_assets(self, state: str) -> bool:
+        character = self._model.settings.get("character", "default")
+        if character == "default":
+            folders = [
+                resource_path(os.path.join("assets", "帥潮教授", state)),
+                resource_path(os.path.join("assets", state)),
+            ]
+        else:
+            folders = [resource_path(os.path.join("assets", character, state))]
+        return any(
+            os.path.isdir(folder) and any(
+                f.lower().endswith(".png") for f in os.listdir(folder)
+            )
+            for folder in folders
+        )
+
     def _set_status(self, status: str):
         self._status = status
         self._view.set_status(status)
@@ -3859,8 +3875,7 @@ class PetController:
         self._set_status("studying")
 
     def do_sleep(self):
-        folder = resource_path(os.path.join("assets", "sleep"))
-        self._set_status("sleep" if os.path.isdir(folder) else "idle")
+        self._set_status("sleep" if self._has_state_assets("sleep") else "idle")
 
     # ── 番茄鐘控制 ───────────────────────────────────────────
 
@@ -4300,8 +4315,7 @@ class PetController:
     def _set_status_for_rest(self, phase: str):
         self._music.stop()
         if phase == "long_rest":
-            folder = resource_path(os.path.join("assets", "sleep"))
-            self._set_status("sleep" if os.path.isdir(folder) else "idle")
+            self._set_status("sleep" if self._has_state_assets("sleep") else "idle")
         else:
             self._set_status("idle")
 
